@@ -57,7 +57,7 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     echo "   (nano: Ctrl+O บันทึก, Ctrl+X ออก)"
     echo ""
     sleep 1
-    nano "$CONFIG_FILE"
+    nano "$CONFIG_FILE" </dev/tty
     echo ""
 fi
 
@@ -98,7 +98,7 @@ fi
 echo "║"
 echo "╚══════════════════════════════════════════════════════════════"
 echo ""
-read -rp "  ▶  ยืนยันการเปลี่ยนค่า? [y/N] : " _CONFIRM
+read -rp "  ▶  ยืนยันการเปลี่ยนค่า? [y/N] : " _CONFIRM </dev/tty
 echo ""
 if [[ ! "$_CONFIRM" =~ ^[Yy]$ ]]; then
     echo "🚫 ยกเลิกการทำงาน"
