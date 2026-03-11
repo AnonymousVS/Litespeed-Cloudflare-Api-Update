@@ -220,7 +220,7 @@ process_site() {
         $cur_name    = trim((string) get_option("litespeed.conf.cdn-cloudflare_name",  ""));
 
         // ── 3. CF_ONLY_ACTIVE : ข้ามถ้า CF ปิดอยู่ ───────────
-        $only_active = ('"'"'$CF_ONLY_ACTIVE'"'"' === "yes");
+        $only_active = (trim('"'"'$CF_ONLY_ACTIVE'"'"') === "yes");
         if ($only_active && (!$cur_enabled || $cur_enabled === "0")) {
             echo "STATUS:SKIP_CFOFF"; return;
         }
@@ -228,19 +228,23 @@ process_site() {
         // ── 4. ตรวจสอบ key/email — เขียนทับถ้าไม่ตรง ────────
         $new_key   = '"'"'$CF_KEY'"'"';
         $new_email = '"'"'$CF_EMAIL'"'"';
-        $overwrite = ('"'"'$CF_OVERWRITE_KEY'"'"' === "yes");
+        // trim() ป้องกัน trailing space/newline ใน config ที่ทำให้ === "yes" ไม่ match
+        $overwrite = (trim('"'"'$CF_OVERWRITE_KEY'"'"') === "yes");
 
+        // ตรวจว่า key/email ใน DB ตรงกับ config หรือไม่
         $key_match   = ($cur_key !== "" && $cur_key === $new_key);
         $email_match = ($cur_email === $new_email);
 
-        // มี key อยู่แล้ว + ตรงทั้ง key และ email → ไม่ต้องทำอะไร
+        // CF_OVERWRITE_KEY=no + มี key อยู่แล้ว + ตรงทั้ง key และ email → ไม่ต้องทำอะไร
         if (!$overwrite && $cur_key !== "" && $key_match && $email_match) {
-            printf("STATUS:NOCHANGE\tOLD_KEY:%s\tOLD_EMAIL:%s\tDOMAIN:%s", substr($cur_key,0,8), $cur_email, $cur_name);
+            printf("STATUS:NOCHANGE\tOLD_KEY:%s\tOLD_EMAIL:%s\tDOMAIN:%s",
+                substr($cur_key, 0, 8), $cur_email, $cur_name);
             return;
         }
 
-        // กำหนดว่า force overwrite เพราะ key/email ไม่ตรง (ไม่ใช่จาก CF_OVERWRITE_KEY=yes)
-        $force_ow = (!$overwrite && $cur_key !== "" && (!$key_match || !$email_match)) ? 1 : 0;
+        // force_ow=1 หมายถึง: มี key เดิมอยู่แล้ว แต่ key หรือ email ไม่ตรง → ต้องเขียนทับ
+        // ใช้แยกแยะจากกรณี key ว่างเปล่า (fresh install)
+        $force_ow = ($cur_key !== "" && (!$key_match || !$email_match)) ? 1 : 0;
 
         // ── 5. Auto-fix domain ให้ตรงกับ folder ──────────────
         $folder = basename(rtrim(ABSPATH, "/"));
@@ -268,8 +272,9 @@ process_site() {
         }
 
         // ── 7. ดึง Zone ID จาก Cloudflare API ────────────────
-        $max_retry   = '"'"'$MAX_RETRY'"'"';
-        $retry_delay = '"'"'$RETRY_DELAY'"'"';
+        // (int) cast บังคับ เพราะ PHP 8 เปรียบ int < string ต่างจาก PHP 7
+        $max_retry   = max(1, (int) '"'"'$MAX_RETRY'"'"');
+        $retry_delay = max(1, (int) '"'"'$RETRY_DELAY'"'"');
         $zone_id     = "";
         $zone_name   = "";
         $cf_error    = "";
@@ -363,23 +368,30 @@ process_site() {
             [[ "$FORCE_OW" == "1" ]] && OW_TAG=" | ✏️ เขียนทับ (key/email เดิมไม่ตรง)"
 
             if [[ "$KEY_OK" == "1" && "$NEW_ZONE" != "(no zone)" ]]; then
-                _log  "✅ PASS: $LABEL | domain=$DOMAIN | key: ${OLD_KEY}... → ${NEW_KEY}... | email: ${OLD_EMAIL:-"(none)"} → ${NEW_EMAIL:-"(none)"} | zone: $OLD_ZONE → $NEW_ZONE | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
-                _log_r pass "$SITE | domain=$DOMAIN | old_key=${OLD_KEY}... | new_key=${NEW_KEY}... | old_email=${OLD_EMAIL:-"(none)"} | new_email=${NEW_EMAIL:-"(none)"} | zone: $OLD_ZONE → $NEW_ZONE | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
-                [[ "$FORCE_OW" == "1" ]] && _log_r overwrite "$SITE | domain=$DOMAIN | เขียนทับ old_key=${OLD_KEY}... → new_key=${NEW_KEY}... | old_email=${OLD_EMAIL:-"(none)"} → new_email=${NEW_EMAIL:-"(none)"}"
+                _log  "✅ PASS: $LABEL | domain=$DOMAIN | key: ${OLD_KEY:-"(none)"}... → ${NEW_KEY}... | email: ${OLD_EMAIL:-"(none)"} → ${NEW_EMAIL:-"(none)"} | zone: $OLD_ZONE → $NEW_ZONE | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
+                _log_r pass "$SITE | domain=$DOMAIN | old_key=${OLD_KEY:-"(none)"}... | new_key=${NEW_KEY}... | old_email=${OLD_EMAIL:-"(none)"} | new_email=${NEW_EMAIL:-"(none)"} | zone: $OLD_ZONE → $NEW_ZONE | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
+                [[ "$FORCE_OW" == "1" ]] && _log_r overwrite "$SITE | domain=$DOMAIN | เขียนทับ old_key=${OLD_KEY:-"(none)"}... → new_key=${NEW_KEY}... | old_email=${OLD_EMAIL:-"(none)"} → new_email=${NEW_EMAIL:-"(none)"}"
                 [[ "$FIXED"    == "1" ]] && _log_r mismatch  "$SITE | domain ถูกแก้อัตโนมัติ → $DOMAIN"
                 touch "${RESULT_DIR}/pass_${UNIQ}"
                 [[ "$FORCE_OW" == "1" ]] && touch "${RESULT_DIR}/overwrite_${UNIQ}"
                 [[ "$FIXED"    == "1" ]] && touch "${RESULT_DIR}/mismatch_${UNIQ}"
             elif [[ "$KEY_OK" == "1" && "$CF_ERROR" == "zone_empty" ]]; then
-                _log  "🌐 NOTCF: $LABEL | domain=$DOMAIN | domain ไม่อยู่ใน CF account${OW_TAG}${FIX_TAG}"
-                _log_r fail "$SITE | domain=$DOMAIN | key/email อัปเดตแล้ว แต่ domain ไม่อยู่ใน CF | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
-                [[ "$FORCE_OW" == "1" ]] && _log_r overwrite "$SITE | domain=$DOMAIN | เขียนทับ old_key=${OLD_KEY}... | old_email=${OLD_EMAIL:-"(none)"}"
+                _log  "🌐 NOTCF: $LABEL | domain=$DOMAIN | key/email เขียนแล้ว แต่ domain ไม่อยู่ใน CF account (attempt=${ATTEMPT}/${MAX_RETRY})${OW_TAG}${FIX_TAG}"
+                _log_r fail "$SITE | domain=$DOMAIN | key อัปเดตแล้ว แต่ domain ไม่อยู่ใน CF | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
+                [[ "$FORCE_OW" == "1" ]] && _log_r overwrite "$SITE | domain=$DOMAIN | เขียนทับ old_key=${OLD_KEY:-"(none)"}... | old_email=${OLD_EMAIL:-"(none)"}"
+                touch "${RESULT_DIR}/fail_${UNIQ}"
+                [[ "$FORCE_OW" == "1" ]] && touch "${RESULT_DIR}/overwrite_${UNIQ}"
+            elif [[ "$KEY_OK" == "1" && -n "$CF_ERROR" ]]; then
+                _log  "❌ FAIL (CF API error): $LABEL | domain=$DOMAIN | error=$CF_ERROR | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
+                _log_r fail "$SITE | domain=$DOMAIN | key อัปเดตแล้ว แต่ดึง zone ไม่ได้ | error=$CF_ERROR | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
+                [[ "$FORCE_OW" == "1" ]] && _log_r overwrite "$SITE | domain=$DOMAIN | เขียนทับ old_key=${OLD_KEY:-"(none)"}... | old_email=${OLD_EMAIL:-"(none)"}"
                 touch "${RESULT_DIR}/fail_${UNIQ}"
                 [[ "$FORCE_OW" == "1" ]] && touch "${RESULT_DIR}/overwrite_${UNIQ}"
             elif [[ "$KEY_OK" == "1" ]]; then
-                _log  "❌ FAIL (CF API error): $LABEL | domain=$DOMAIN | error=$CF_ERROR | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
-                _log_r fail "$SITE | domain=$DOMAIN | key/email อัปเดตแล้ว แต่ดึง zone ไม่ได้ | error=$CF_ERROR | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
-                [[ "$FORCE_OW" == "1" ]] && _log_r overwrite "$SITE | domain=$DOMAIN | เขียนทับ old_key=${OLD_KEY}... | old_email=${OLD_EMAIL:-"(none)"}"
+                # KEY_OK=1 แต่ zone ว่าง และ CF_ERROR ว่าง = CF API ไม่ได้ถูกเรียก (attempt=0) หรือ network timeout
+                _log  "⚠️  WARN (no zone, unknown): $LABEL | domain=$DOMAIN | key เขียนแล้ว แต่ไม่ได้ zone (attempt=${ATTEMPT}/${MAX_RETRY}, cf_error=empty)${OW_TAG}${FIX_TAG}"
+                _log_r fail "$SITE | domain=$DOMAIN | key อัปเดตแล้ว zone ไม่ได้ — cf_error ว่าง | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
+                [[ "$FORCE_OW" == "1" ]] && _log_r overwrite "$SITE | domain=$DOMAIN | เขียนทับ old_key=${OLD_KEY:-"(none)"}... | old_email=${OLD_EMAIL:-"(none)"}"
                 touch "${RESULT_DIR}/fail_${UNIQ}"
                 [[ "$FORCE_OW" == "1" ]] && touch "${RESULT_DIR}/overwrite_${UNIQ}"
             else
