@@ -220,16 +220,16 @@ process_site() {
         $cur_name    = trim((string) get_option("litespeed.conf.cdn-cloudflare_name",  ""));
 
         // ── 3. CF_ONLY_ACTIVE : ข้ามถ้า CF ปิดอยู่ ───────────
-        $only_active = (trim('"'"'$CF_ONLY_ACTIVE'"'"') === "yes");
+        $only_active = (trim((string) getenv("CF_ONLY_ACTIVE")) === "yes");
         if ($only_active && (!$cur_enabled || $cur_enabled === "0")) {
             echo "STATUS:SKIP_CFOFF"; return;
         }
 
         // ── 4. ตรวจสอบ key/email — เขียนทับถ้าไม่ตรง ────────
-        $new_key   = '"'"'$CF_KEY'"'"';
-        $new_email = '"'"'$CF_EMAIL'"'"';
+        $new_key   = trim((string) getenv("CF_KEY"));
+        $new_email = trim((string) getenv("CF_EMAIL"));
         // trim() ป้องกัน trailing space/newline ใน config ที่ทำให้ === "yes" ไม่ match
-        $overwrite = (trim('"'"'$CF_OVERWRITE_KEY'"'"') === "yes");
+        $overwrite = (trim((string) getenv("CF_OVERWRITE_KEY")) === "yes");
 
         // ตรวจว่า key/email ใน DB ตรงกับ config หรือไม่
         $key_match   = ($cur_key !== "" && $cur_key === $new_key);
@@ -273,8 +273,8 @@ process_site() {
 
         // ── 7. ดึง Zone ID จาก Cloudflare API ────────────────
         // (int) cast บังคับ เพราะ PHP 8 เปรียบ int < string ต่างจาก PHP 7
-        $max_retry   = max(1, (int) '"'"'$MAX_RETRY'"'"');
-        $retry_delay = max(1, (int) '"'"'$RETRY_DELAY'"'"');
+        $max_retry   = max(1, (int) getenv("MAX_RETRY"));
+        $retry_delay = max(1, (int) getenv("RETRY_DELAY"));
         $zone_id     = "";
         $zone_name   = "";
         $cf_error    = "";
