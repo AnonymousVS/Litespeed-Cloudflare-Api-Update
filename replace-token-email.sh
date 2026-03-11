@@ -94,6 +94,7 @@ LOG_FAIL="/var/log/lscwp-cf-update-fail.log"
 LOG_SKIP="/var/log/lscwp-cf-update-skip.log"
 LOG_NOCHANGE="/var/log/lscwp-cf-update-nochange.log"
 LOG_MISMATCH="/var/log/lscwp-cf-update-mismatch.log"
+LOG_OVERWRITE="/var/log/lscwp-cf-update-overwrite.log"
 LOCK_FILE="${LOG_FILE}.lock"
 RESULT_DIR="/tmp/lscwp-cf-update-$$"
 mkdir -p "$RESULT_DIR"
@@ -110,7 +111,7 @@ cleanup() {
     rm -f "$LOCK_FILE" \
           "${LOG_FILE}.pass.lock" "${LOG_FILE}.fail.lock" \
           "${LOG_FILE}.skip.lock" "${LOG_FILE}.nochange.lock" \
-          "${LOG_FILE}.mismatch.lock"
+          "${LOG_FILE}.mismatch.lock" "${LOG_FILE}.overwrite.lock"
 }
 trap cleanup EXIT
 
@@ -127,6 +128,7 @@ fi
 > "$LOG_SKIP"
 > "$LOG_NOCHANGE"
 > "$LOG_MISMATCH"
+> "$LOG_OVERWRITE"
 
 START_TIME=$(date +%s)
 log "======================================"
@@ -195,11 +197,12 @@ process_site() {
     _log_r() {
         local ts; ts=$(date '+%Y-%m-%d %H:%M:%S')
         case "$1" in
-            pass)     ( flock 201; echo "[$ts] $2" >> "$LOG_PASS"     ) 201>"${LOG_FILE}.pass.lock" ;;
-            fail)     ( flock 202; echo "[$ts] $2" >> "$LOG_FAIL"     ) 202>"${LOG_FILE}.fail.lock" ;;
-            skip)     ( flock 203; echo "[$ts] $2" >> "$LOG_SKIP"     ) 203>"${LOG_FILE}.skip.lock" ;;
-            nochange) ( flock 204; echo "[$ts] $2" >> "$LOG_NOCHANGE" ) 204>"${LOG_FILE}.nochange.lock" ;;
-            mismatch) ( flock 205; echo "[$ts] $2" >> "$LOG_MISMATCH" ) 205>"${LOG_FILE}.mismatch.lock" ;;
+            pass)      ( flock 201; echo "[$ts] $2" >> "$LOG_PASS"      ) 201>"${LOG_FILE}.pass.lock" ;;
+            fail)      ( flock 202; echo "[$ts] $2" >> "$LOG_FAIL"      ) 202>"${LOG_FILE}.fail.lock" ;;
+            skip)      ( flock 203; echo "[$ts] $2" >> "$LOG_SKIP"      ) 203>"${LOG_FILE}.skip.lock" ;;
+            nochange)  ( flock 204; echo "[$ts] $2" >> "$LOG_NOCHANGE"  ) 204>"${LOG_FILE}.nochange.lock" ;;
+            mismatch)  ( flock 205; echo "[$ts] $2" >> "$LOG_MISMATCH"  ) 205>"${LOG_FILE}.mismatch.lock" ;;
+            overwrite) ( flock 206; echo "[$ts] $2" >> "$LOG_OVERWRITE" ) 206>"${LOG_FILE}.overwrite.lock" ;;
         esac
     }
 
@@ -222,12 +225,22 @@ process_site() {
             echo "STATUS:SKIP_CFOFF"; return;
         }
 
-        // ── 4. CF_OVERWRITE_KEY : ข้ามถ้ามี key อยู่แล้ว ────
+        // ── 4. ตรวจสอบ key/email — เขียนทับถ้าไม่ตรง ────────
+        $new_key   = '"'"'$CF_KEY'"'"';
+        $new_email = '"'"'$CF_EMAIL'"'"';
         $overwrite = ('"'"'$CF_OVERWRITE_KEY'"'"' === "yes");
-        if (!$overwrite && $cur_key !== "") {
-            printf("STATUS:NOCHANGE\tOLD_KEY:%s\tDOMAIN:%s", substr($cur_key,0,8), $cur_name);
+
+        $key_match   = ($cur_key !== "" && $cur_key === $new_key);
+        $email_match = ($cur_email === $new_email);
+
+        // มี key อยู่แล้ว + ตรงทั้ง key และ email → ไม่ต้องทำอะไร
+        if (!$overwrite && $cur_key !== "" && $key_match && $email_match) {
+            printf("STATUS:NOCHANGE\tOLD_KEY:%s\tOLD_EMAIL:%s\tDOMAIN:%s", substr($cur_key,0,8), $cur_email, $cur_name);
             return;
         }
+
+        // กำหนดว่า force overwrite เพราะ key/email ไม่ตรง (ไม่ใช่จาก CF_OVERWRITE_KEY=yes)
+        $force_ow = (!$overwrite && $cur_key !== "" && (!$key_match || !$email_match)) ? 1 : 0;
 
         // ── 5. Auto-fix domain ให้ตรงกับ folder ──────────────
         $folder = basename(rtrim(ABSPATH, "/"));
@@ -242,8 +255,6 @@ process_site() {
         }
 
         // ── 6. เขียน Credentials ใหม่ลง DB ───────────────────
-        $new_key   = '"'"'$CF_KEY'"'"';
-        $new_email = '"'"'$CF_EMAIL'"'"';
         $is_apikey = ($new_email !== "");
 
         update_option("litespeed.conf.cdn-cloudflare_key",   $new_key);
@@ -313,7 +324,7 @@ process_site() {
         $key_ok  = ($v_key === $new_key) ? 1 : 0;
 
         printf(
-            "STATUS:DONE\tKEY_OK:%d\tDOMAIN:%s\tOLD_KEY:%s\tNEW_KEY:%s\tOLD_EMAIL:%s\tNEW_EMAIL:%s\tOLD_ZONE:%s\tNEW_ZONE:%s\tFIXED:%d\tATTEMPT:%d\tCF_ERROR:%s",
+            "STATUS:DONE\tKEY_OK:%d\tDOMAIN:%s\tOLD_KEY:%s\tNEW_KEY:%s\tOLD_EMAIL:%s\tNEW_EMAIL:%s\tOLD_ZONE:%s\tNEW_ZONE:%s\tFIXED:%d\tATTEMPT:%d\tCF_ERROR:%s\tFORCE_OW:%d",
             $key_ok,
             $zone_name ?: $cur_name,
             substr($cur_key,  0, 8),
@@ -324,7 +335,8 @@ process_site() {
             $v_zone   ?: "(no zone)",
             $was_fixed ? 1 : 0,
             $attempt,
-            $cf_error
+            $cf_error,
+            $force_ow
         );
     ' --allow-root 2>/dev/null)
 
@@ -333,7 +345,7 @@ process_site() {
 
     case "$STATUS" in
         DONE)
-            local KEY_OK DOMAIN OLD_KEY NEW_KEY OLD_EMAIL NEW_EMAIL OLD_ZONE NEW_ZONE FIXED ATTEMPT CF_ERROR
+            local KEY_OK DOMAIN OLD_KEY NEW_KEY OLD_EMAIL NEW_EMAIL OLD_ZONE NEW_ZONE FIXED ATTEMPT CF_ERROR FORCE_OW
             KEY_OK=$(    echo "$EVAL_OUT" | grep -oP '(?<=KEY_OK:)\d+')
             DOMAIN=$(    echo "$EVAL_OUT" | grep -oP '(?<=DOMAIN:)[^\t]*')
             OLD_KEY=$(   echo "$EVAL_OUT" | grep -oP '(?<=OLD_KEY:)[^\t]*')
@@ -345,35 +357,44 @@ process_site() {
             FIXED=$(     echo "$EVAL_OUT" | grep -oP '(?<=FIXED:)\d+')
             ATTEMPT=$(   echo "$EVAL_OUT" | grep -oP '(?<=ATTEMPT:)\d+')
             CF_ERROR=$(  echo "$EVAL_OUT" | grep -oP '(?<=CF_ERROR:)[^\t]*')
-            local FIX_TAG=""
-            [[ "$FIXED" == "1" ]] && FIX_TAG=" | ⚙️ domain ถูกแก้อัตโนมัติ"
+            FORCE_OW=$(  echo "$EVAL_OUT" | grep -oP '(?<=FORCE_OW:)\d+')
+            local FIX_TAG="" OW_TAG=""
+            [[ "$FIXED"    == "1" ]] && FIX_TAG=" | ⚙️ domain ถูกแก้อัตโนมัติ"
+            [[ "$FORCE_OW" == "1" ]] && OW_TAG=" | ✏️ เขียนทับ (key/email เดิมไม่ตรง)"
 
             if [[ "$KEY_OK" == "1" && "$NEW_ZONE" != "(no zone)" ]]; then
-                _log  "✅ PASS: $LABEL | domain=$DOMAIN | key: ${OLD_KEY}... → ${NEW_KEY}... | zone: $OLD_ZONE → $NEW_ZONE | attempt=${ATTEMPT}/${MAX_RETRY}${FIX_TAG}"
-                _log_r pass "$SITE | domain=$DOMAIN | old_key=${OLD_KEY}... | new_key=${NEW_KEY}... | old_email=$OLD_EMAIL | new_email=$NEW_EMAIL | zone: $OLD_ZONE → $NEW_ZONE | attempt=${ATTEMPT}/${MAX_RETRY}${FIX_TAG}"
-                [[ "$FIXED" == "1" ]] && _log_r mismatch "$SITE | domain ถูกแก้อัตโนมัติ → $DOMAIN"
+                _log  "✅ PASS: $LABEL | domain=$DOMAIN | key: ${OLD_KEY}... → ${NEW_KEY}... | email: ${OLD_EMAIL:-"(none)"} → ${NEW_EMAIL:-"(none)"} | zone: $OLD_ZONE → $NEW_ZONE | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
+                _log_r pass "$SITE | domain=$DOMAIN | old_key=${OLD_KEY}... | new_key=${NEW_KEY}... | old_email=${OLD_EMAIL:-"(none)"} | new_email=${NEW_EMAIL:-"(none)"} | zone: $OLD_ZONE → $NEW_ZONE | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
+                [[ "$FORCE_OW" == "1" ]] && _log_r overwrite "$SITE | domain=$DOMAIN | เขียนทับ old_key=${OLD_KEY}... → new_key=${NEW_KEY}... | old_email=${OLD_EMAIL:-"(none)"} → new_email=${NEW_EMAIL:-"(none)"}"
+                [[ "$FIXED"    == "1" ]] && _log_r mismatch  "$SITE | domain ถูกแก้อัตโนมัติ → $DOMAIN"
                 touch "${RESULT_DIR}/pass_${UNIQ}"
-                [[ "$FIXED" == "1" ]] && touch "${RESULT_DIR}/mismatch_${UNIQ}"
+                [[ "$FORCE_OW" == "1" ]] && touch "${RESULT_DIR}/overwrite_${UNIQ}"
+                [[ "$FIXED"    == "1" ]] && touch "${RESULT_DIR}/mismatch_${UNIQ}"
             elif [[ "$KEY_OK" == "1" && "$CF_ERROR" == "zone_empty" ]]; then
-                _log  "🌐 NOTCF: $LABEL | domain=$DOMAIN | domain ไม่อยู่ใน CF account${FIX_TAG}"
-                _log_r fail "$SITE | domain=$DOMAIN | key อัปเดตแล้ว แต่ domain ไม่อยู่ใน CF | attempt=${ATTEMPT}/${MAX_RETRY}${FIX_TAG}"
+                _log  "🌐 NOTCF: $LABEL | domain=$DOMAIN | domain ไม่อยู่ใน CF account${OW_TAG}${FIX_TAG}"
+                _log_r fail "$SITE | domain=$DOMAIN | key/email อัปเดตแล้ว แต่ domain ไม่อยู่ใน CF | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
+                [[ "$FORCE_OW" == "1" ]] && _log_r overwrite "$SITE | domain=$DOMAIN | เขียนทับ old_key=${OLD_KEY}... | old_email=${OLD_EMAIL:-"(none)"}"
                 touch "${RESULT_DIR}/fail_${UNIQ}"
+                [[ "$FORCE_OW" == "1" ]] && touch "${RESULT_DIR}/overwrite_${UNIQ}"
             elif [[ "$KEY_OK" == "1" ]]; then
-                _log  "❌ FAIL (CF API error): $LABEL | domain=$DOMAIN | error=$CF_ERROR | attempt=${ATTEMPT}/${MAX_RETRY}${FIX_TAG}"
-                _log_r fail "$SITE | domain=$DOMAIN | key อัปเดตแล้ว แต่ดึง zone ไม่ได้ | error=$CF_ERROR | attempt=${ATTEMPT}/${MAX_RETRY}${FIX_TAG}"
+                _log  "❌ FAIL (CF API error): $LABEL | domain=$DOMAIN | error=$CF_ERROR | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
+                _log_r fail "$SITE | domain=$DOMAIN | key/email อัปเดตแล้ว แต่ดึง zone ไม่ได้ | error=$CF_ERROR | attempt=${ATTEMPT}/${MAX_RETRY}${OW_TAG}${FIX_TAG}"
+                [[ "$FORCE_OW" == "1" ]] && _log_r overwrite "$SITE | domain=$DOMAIN | เขียนทับ old_key=${OLD_KEY}... | old_email=${OLD_EMAIL:-"(none)"}"
                 touch "${RESULT_DIR}/fail_${UNIQ}"
+                [[ "$FORCE_OW" == "1" ]] && touch "${RESULT_DIR}/overwrite_${UNIQ}"
             else
-                _log  "❌ FAIL (verify key ไม่ผ่าน): $LABEL | domain=$DOMAIN${FIX_TAG}"
-                _log_r fail "$SITE | domain=$DOMAIN | verify failed — key ไม่ตรง${FIX_TAG}"
+                _log  "❌ FAIL (verify key ไม่ผ่าน): $LABEL | domain=$DOMAIN${OW_TAG}${FIX_TAG}"
+                _log_r fail "$SITE | domain=$DOMAIN | verify failed — key ไม่ตรง${OW_TAG}${FIX_TAG}"
                 touch "${RESULT_DIR}/fail_${UNIQ}"
             fi
             ;;
         NOCHANGE)
-            local OLD_KEY DOMAIN
-            OLD_KEY=$(echo "$EVAL_OUT" | grep -oP '(?<=OLD_KEY:)[^\t]*')
-            DOMAIN=$( echo "$EVAL_OUT" | grep -oP '(?<=DOMAIN:)[^\t]*')
-            _log  "⏩ NOCHANGE: $LABEL | domain=$DOMAIN | มี key อยู่แล้ว (${OLD_KEY}...) ข้ามไป"
-            _log_r nochange "$SITE | domain=$DOMAIN | existing_key=${OLD_KEY}..."
+            local OLD_KEY OLD_EMAIL DOMAIN
+            OLD_KEY=$(   echo "$EVAL_OUT" | grep -oP '(?<=OLD_KEY:)[^\t]*')
+            OLD_EMAIL=$( echo "$EVAL_OUT" | grep -oP '(?<=OLD_EMAIL:)[^\t]*')
+            DOMAIN=$(    echo "$EVAL_OUT" | grep -oP '(?<=DOMAIN:)[^\t]*')
+            _log  "⏩ NOCHANGE: $LABEL | domain=$DOMAIN | key=${OLD_KEY}... email=${OLD_EMAIL:-"(none)"} ตรงกับ config แล้ว"
+            _log_r nochange "$SITE | domain=$DOMAIN | existing_key=${OLD_KEY}... | existing_email=${OLD_EMAIL:-"(none)"}"
             touch "${RESULT_DIR}/nochange_${UNIQ}"
             ;;
         SKIP_CFOFF)
@@ -395,7 +416,7 @@ process_site() {
 }
 
 export -f process_site
-export LOG_FILE LOCK_FILE LOG_PASS LOG_FAIL LOG_SKIP LOG_NOCHANGE LOG_MISMATCH RESULT_DIR
+export LOG_FILE LOCK_FILE LOG_PASS LOG_FAIL LOG_SKIP LOG_NOCHANGE LOG_MISMATCH LOG_OVERWRITE RESULT_DIR
 export WP_TIMEOUT MAX_RETRY RETRY_DELAY CF_KEY CF_EMAIL CF_ONLY_ACTIVE CF_OVERWRITE_KEY
 
 # ─── รัน parallel ────────────────────────────────────────────
@@ -416,28 +437,31 @@ for pid in "${PIDS[@]}"; do wait "$pid"; done
 END_TIME=$(date +%s)
 ELAPSED=$(( END_TIME - START_TIME ))
 
-SUCCESS=$(  find "$RESULT_DIR" -name "pass_*"     2>/dev/null | wc -l)
-FAILED=$(   find "$RESULT_DIR" -name "fail_*"     2>/dev/null | wc -l)
-SKIPPED=$(  find "$RESULT_DIR" -name "skip_*"     2>/dev/null | wc -l)
-NOCHANGE=$( find "$RESULT_DIR" -name "nochange_*"  2>/dev/null | wc -l)
-MISMATCH=$( find "$RESULT_DIR" -name "mismatch_*"  2>/dev/null | wc -l)
+SUCCESS=$(   find "$RESULT_DIR" -name "pass_*"      2>/dev/null | wc -l)
+FAILED=$(    find "$RESULT_DIR" -name "fail_*"      2>/dev/null | wc -l)
+SKIPPED=$(   find "$RESULT_DIR" -name "skip_*"      2>/dev/null | wc -l)
+NOCHANGE=$(  find "$RESULT_DIR" -name "nochange_*"  2>/dev/null | wc -l)
+MISMATCH=$(  find "$RESULT_DIR" -name "mismatch_*"  2>/dev/null | wc -l)
+OVERWRITTEN=$(find "$RESULT_DIR" -name "overwrite_*" 2>/dev/null | wc -l)
 
 log "======================================"
 log " สรุปผลรวม"
-log " รวมทั้งหมด      : $TOTAL เว็บ"
-log " ✅ Pass (อัปเดต) : $SUCCESS เว็บ"
-log " ⏩ Nochange       : $NOCHANGE เว็บ  (มี key อยู่แล้ว ข้ามตาม CF_OVERWRITE_KEY=no)"
-log " ❌ Fail          : $FAILED เว็บ"
-log " ⏭  Skip          : $SKIPPED เว็บ  (plugin ไม่ active / CF ปิด)"
-log " ⚙️  Auto-fixed    : $MISMATCH เว็บ  (domain ถูกแก้อัตโนมัติจาก folder name)"
-log " เวลาที่ใช้       : $(( ELAPSED / 60 )) นาที $(( ELAPSED % 60 )) วินาที"
+log " รวมทั้งหมด        : $TOTAL เว็บ"
+log " ✅ Pass (อัปเดต)  : $SUCCESS เว็บ"
+log " ✏️  Force Overwrite : $OVERWRITTEN เว็บ  (มี key/email เดิมไม่ตรง — เขียนทับ)"
+log " ⏩ Nochange         : $NOCHANGE เว็บ  (key+email ตรงกับ config แล้ว)"
+log " ❌ Fail            : $FAILED เว็บ"
+log " ⏭  Skip            : $SKIPPED เว็บ  (plugin ไม่ active / CF ปิด)"
+log " ⚙️  Auto-fixed      : $MISMATCH เว็บ  (domain ถูกแก้อัตโนมัติจาก folder name)"
+log " เวลาที่ใช้         : $(( ELAPSED / 60 )) นาที $(( ELAPSED % 60 )) วินาที"
 log "======================================"
-log " Log รวม         : $LOG_FILE"
-log " ✅ Pass          : $LOG_PASS"
-log " ❌ Fail          : $LOG_FAIL"
-log " ⏩ Nochange       : $LOG_NOCHANGE"
-log " ⏭  Skip          : $LOG_SKIP"
-log " ⚙️  Auto-fixed    : $LOG_MISMATCH"
+log " Log รวม           : $LOG_FILE"
+log " ✅ Pass            : $LOG_PASS"
+log " ✏️  Force Overwrite : $LOG_OVERWRITE"
+log " ❌ Fail            : $LOG_FAIL"
+log " ⏩ Nochange         : $LOG_NOCHANGE"
+log " ⏭  Skip            : $LOG_SKIP"
+log " ⚙️  Auto-fixed      : $LOG_MISMATCH"
 log "======================================"
 
 exit 0
