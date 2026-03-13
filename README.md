@@ -1,13 +1,13 @@
 # LiteSpeed Cache — Cloudflare API Bulk Update
 
-Bash script สำหรับอัปเดต **Cloudflare API Key / Token / Email** ให้กับ WordPress ทุกเว็บบนเซิร์ฟเวอร์ ผ่าน **LiteSpeed Cache Plugin → CDN → Cloudflare** โดยอ่านค่าจากไฟล์ CSV
+Bash script สำหรับอัปเดต **Cloudflare API Key / Token / ** ให้กับ WordPress ทุกเว็บบนเซิร์ฟเวอร์ ผ่าน **LiteSpeed Cache Plugin → CDN → Cloudflare** โดยอ่านค่าจากไฟล์ CSV
 
 ## Features
 
-- อ่าน config จาก **2 ไฟล์ CSV** บน GitHub — แต่ละโดเมนมี Email + API Token ของตัวเอง
+- อ่าน config จาก **2 ไฟล์ CSV** บน GitHub — แต่ละโดเมนมี  + API Token ของตัวเอง
 - ประมวลผล **เฉพาะโดเมนที่ระบุ** ใน CSV เท่านั้น
 - เปิด **Cloudflare API = ON** อัตโนมัติ
-- ใส่ **API Token + Email** ให้แต่ละเว็บ
+- ใส่ **API Token + ** ให้แต่ละเว็บ
 - เปิด **Clear Cloudflare cache on purge all = ON**
 - กด **Save** = ดึง **Zone ID** จาก Cloudflare API อัตโนมัติ (retry 3 ครั้ง)
 - ตรวจสอบผลลัพธ์ + เก็บ **Log แยกตามสถานะ**
@@ -19,9 +19,9 @@ Bash script สำหรับอัปเดต **Cloudflare API Key / Token / 
 
 | ไฟล์ | คำอธิบาย |
 |------|----------|
-| `replace-token-email.sh` | Script หลัก |
-| `config-domain.csv` | รายชื่อ Domain + Cloudflare Email |
-| `config-api-key-token.csv` | Cloudflare Email + API Token |
+| `replace-token-.sh` | Script หลัก |
+| `config-domain.csv` | รายชื่อ Domain + Cloudflare  |
+| `config-api-key-token.csv` | Cloudflare  + API Token |
 
 ## วิธีใช้งาน
 
@@ -30,34 +30,34 @@ Bash script สำหรับอัปเดต **Cloudflare API Key / Token / 
 **config-domain.csv** — ใส่โดเมนที่ต้องการอัปเดต:
 
 ```csv
-Domain,Cloudflare Email
-supreme8888.com,ufavisionseoteam16@gmail.com
-ktv4s.org,ufavisionseoteam17@gmail.com
-m4asia.net,ufavisionseoteam18@gmail.com
+Domain,Cloudflare 
+supreme8888.com,seoteam16@gmail.com
+ktv4s.org,seoteam17@gmail.com
+m4asia.net,seoteam18@gmail.com
 ```
 
 **config-api-key-token.csv** — ใส่ API Token ของแต่ละอีเมล:
 
 ```csv
-Cloudflare Email,API Token
-ufavisionseoteam17@gmail.com,6a0a1968e2b8ca54954a435f4d7f441a1fd2f
-ufavisionseoteam18@gmail.com,3648ec5f900116438e47c4282edd62251e2c3
+Cloudflare ,API Token
+seoteam17@gmail.com,6a0a1968e2b8ca54954a435f4d7f441a1fd2f
+seoteam18@gmail.com,3648ec5f900116438e47c4282edd62251e2c3
 ```
 
-> **หมายเหตุ:** โดเมนที่มี Email แต่ไม่มี Token จะถูก skip อัตโนมัติ
+> **หมายเหตุ:** โดเมนที่มี  แต่ไม่มี Token จะถูก skip อัตโนมัติ
 
 ### 2. รัน Script
 
 **รันจาก GitHub โดยตรง (แนะนำ):**
 
 ```bash
-bash <(curl -s "https://raw.githubusercontent.com/AnonymousVS/litespeed-cloudflare-api-email/main/replace-token-email.sh?t=$(date +%s)")
+bash <(curl -s "https://raw.githubusercontent.com/AnonymousVS/litespeed-cloudflare-api-/main/replace-token-.sh?t=$(date +%s)")
 ```
 
 **หรือรันจากไฟล์ local:**
 
 ```bash
-bash replace-token-email.sh [config-domain.csv] [config-api-key-token.csv]
+bash replace-token-.sh [config-domain.csv] [config-api-key-token.csv]
 ```
 
 > ต้องรันด้วย **root** เพราะใช้ `wp-cli --allow-root`
@@ -68,15 +68,15 @@ Script จะแสดงรายละเอียดก่อนรัน แ
 
 ```
 ╔══════════════════════════════════════════════════════════════
-║   🔄  replace-token-email.sh  v2
-║   CSV-based — แต่ละโดเมนมี Email + Token ของตัวเอง
+║   🔄  replace-token-.sh  v2
+║   CSV-based — แต่ละโดเมนมี  + Token ของตัวเอง
 ╠══════════════════════════════════════════════════════════════
 ║
 ║   จำนวนโดเมน              : 5
 ║   มี Token พร้อม          : 2
 ║   ขาด Token               : 3
 ║
-║   Domain                    Email                          Token
+║   Domain                                              Token
 ║   supreme8888.com           seoteam16@gmail.com            ❌ ไม่มี
 ║   ktv4s.org                 seoteam17@gmail.com            6a0a1968...1fd2f
 ║   m4asia.net                seoteam18@gmail.com            3648ec5f...e2c3
@@ -96,20 +96,20 @@ Script จะทำงาน 10 ขั้นตอนต่อเว็บ:
 | 2 | อ่าน options ปัจจุบัน | — |
 | 3 | ค่าใหม่จาก CSV | — |
 | 4 | เปิด Cloudflare API = ON | `litespeed.conf.cdn-cloudflare` |
-| 5 | ใส่ API Token + Email + Domain | `cdn-cloudflare_key` / `_email` / `_name` |
+| 5 | ใส่ API Token +  + Domain | `cdn-cloudflare_key` / `_` / `_name` |
 | 6 | เปิด CDN = ON | `litespeed.conf.cdn` |
 | 7 | เปิด Clear CF cache on purge all | `litespeed.conf.cdn-cloudflare_clear` |
 | 8 | ดึง Zone ID จาก CF API (= Save) | Cloudflare API v4 |
 | 9 | บันทึก Zone ID ลง DB | `cdn-cloudflare_zone` / `_name` |
-| 10 | Verify ทุกค่า | ตรวจ key + email + zone + cf_on |
+| 10 | Verify ทุกค่า | ตรวจ key +  + zone + cf_on |
 
 ## สถานะผลลัพธ์
 
 | สถานะ | ความหมาย | Log File |
 |-------|----------|----------|
 | ✅ **PASS** | Zone ID แสดง = สำเร็จทั้งหมด | `lscwp-cf-update-pass.log` |
-| ⚠️ **WARN** | Key+Email ใส่แล้ว แต่ Zone ID ยังไม่แสดง | `lscwp-cf-update-warn.log` |
-| ❌ **FAIL** | Verify key/email ไม่ผ่าน หรือ wp eval ล้มเหลว | `lscwp-cf-update-fail.log` |
+| ⚠️ **WARN** | Key+ ใส่แล้ว แต่ Zone ID ยังไม่แสดง | `lscwp-cf-update-warn.log` |
+| ❌ **FAIL** | Verify key/ ไม่ผ่าน หรือ wp eval ล้มเหลว | `lscwp-cf-update-fail.log` |
 | ⏭ **SKIP** | ไม่มี API Token / LiteSpeed Cache ไม่ active | `lscwp-cf-update-skip.log` |
 | 🔍 **NOT FOUND** | ไม่พบ WordPress directory บนเซิร์ฟเวอร์ | `lscwp-cf-update-notfound.log` |
 
@@ -135,7 +135,7 @@ cat /var/log/lscwp-cf-update-fail.log
 |---------|----------|
 | CSV ค้างจาก run เก่า | ดาวน์โหลดจาก GitHub ใหม่ทุกครั้ง + cache-busting |
 | GitHub CDN cache | ต่อ `?t=timestamp` ท้าย URL อัตโนมัติ |
-| Email ตัวพิมพ์ใหญ่/เล็กไม่ตรง | Lowercase ทั้ง email + domain ก่อน compare |
+|  ตัวพิมพ์ใหญ่/เล็กไม่ตรง | Lowercase ทั้ง  + domain ก่อน compare |
 | Domain ซ้ำใน CSV | แจ้งเตือน + ใช้ค่าจากแถวสุดท้าย |
 | Token มีอักขระพิเศษ | Validate + skip ถ้ามี `' " \ $ ; \|` |
 | Cloudflare API rate limit | หน่วง 1 วินาทีระหว่างเว็บ |
@@ -169,7 +169,7 @@ cat /var/log/lscwp-cf-update-fail.log
 - เพิ่ม Zone ID verification
 - เพิ่ม WARN สำหรับ Zone ID ไม่แสดง
 - ดาวน์โหลด CSV ใหม่ทุกครั้ง + cache-busting
-- Email lowercase ก่อน compare
+-  lowercase ก่อน compare
 - ตรวจจับ domain ซ้ำใน CSV
 - Validate token special characters
 - แสดง progress ตอน scan WordPress
@@ -177,7 +177,7 @@ cat /var/log/lscwp-cf-update-fail.log
 
 ### v1
 - อ่าน config จาก `.conf` ไฟล์เดียว
-- ใส่ Key + Email เดียวกันให้ทุกเว็บบนเซิร์ฟเวอร์
+- ใส่ Key +  เดียวกันให้ทุกเว็บบนเซิร์ฟเวอร์
 
 ## License
 
