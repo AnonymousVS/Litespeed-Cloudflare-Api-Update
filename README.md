@@ -1,158 +1,184 @@
-# litespeed-cloudflare-api-email
+# LiteSpeed Cache — Cloudflare API Bulk Update
 
-Bulk replace **Cloudflare API Token / Global API Key / Email** ใน LiteSpeed Cache Plugin ทุกเว็บบนเซิร์ฟเวอร์ (cPanel / WHM) พร้อมกัน
+Bash script สำหรับอัปเดต **Cloudflare API Key / Token / Email** ให้กับ WordPress ทุกเว็บบนเซิร์ฟเวอร์ ผ่าน **LiteSpeed Cache Plugin → CDN → Cloudflare** โดยอ่านค่าจากไฟล์ CSV
 
----
+## Features
 
-## ปัญหาที่แก้
+- อ่าน config จาก **2 ไฟล์ CSV** บน GitHub — แต่ละโดเมนมี Email + API Token ของตัวเอง
+- ประมวลผล **เฉพาะโดเมนที่ระบุ** ใน CSV เท่านั้น
+- เปิด **Cloudflare API = ON** อัตโนมัติ
+- ใส่ **API Token + Email** ให้แต่ละเว็บ
+- เปิด **Clear Cloudflare cache on purge all = ON**
+- กด **Save** = ดึง **Zone ID** จาก Cloudflare API อัตโนมัติ (retry 3 ครั้ง)
+- ตรวจสอบผลลัพธ์ + เก็บ **Log แยกตามสถานะ**
+- รันซ้ำได้ปลอดภัย (idempotent)
+- รองรับ **cPanel / WHM** (trueuserdomains, userdatadomains)
+- รัน parallel สูงสุด 5 เว็บพร้อมกัน พร้อม rate limit delay
 
-เมื่อต้องการเปลี่ยน Cloudflare API Token หรือ Email ในเซิร์ฟเวอร์ที่มีหลาย WordPress พร้อมกัน การแก้ทีละเว็บในหน้า LiteSpeed Cache › CDN › Cloudflare เสียเวลามาก — Script นี้ทำในครั้งเดียว แบบ parallel ผ่าน WP-CLI
+## ไฟล์ในโปรเจค
 
----
-
-## ไฟล์ในโปรเจกต์
-
-```
-litespeed-cloudflare-api-email/
-├── replace-token-email.sh      ← script หลัก
-└── replace-token-email.conf    ← config (แก้ที่นี่ที่เดียว)
-```
-
----
+| ไฟล์ | คำอธิบาย |
+|------|----------|
+| `replace-token-email.sh` | Script หลัก |
+| `config-domain.csv` | รายชื่อ Domain + Cloudflare Email |
+| `config-api-key-token.csv` | Cloudflare Email + API Token |
 
 ## วิธีใช้งาน
 
-### วิธีที่ 1 — One-liner (ดาวน์โหลด + รันทันที)
+### 1. แก้ไขไฟล์ CSV
 
-> ⚠️ ต้องมี `replace-token-email.conf` อยู่ใน directory ปัจจุบันก่อน
+**config-domain.csv** — ใส่โดเมนที่ต้องการอัปเดต:
+
+```csv
+Domain,Cloudflare Email
+supreme8888.com,ufavisionseoteam16@gmail.com
+ktv4s.org,ufavisionseoteam17@gmail.com
+m4asia.net,ufavisionseoteam18@gmail.com
+```
+
+**config-api-key-token.csv** — ใส่ API Token ของแต่ละอีเมล:
+
+```csv
+Cloudflare Email,API Token
+ufavisionseoteam17@gmail.com,6a0a1968e2b8ca54954a435f4d7f441a1fd2f
+ufavisionseoteam18@gmail.com,3648ec5f900116438e47c4282edd62251e2c3
+```
+
+> **หมายเหตุ:** โดเมนที่มี Email แต่ไม่มี Token จะถูก skip อัตโนมัติ
+
+### 2. รัน Script
+
+**รันจาก GitHub โดยตรง (แนะนำ):**
 
 ```bash
 bash <(curl -s "https://raw.githubusercontent.com/AnonymousVS/litespeed-cloudflare-api-email/main/replace-token-email.sh?t=$(date +%s)")
 ```
 
----
-
-### วิธีที่ 2 — Clone แล้วแก้ config
+**หรือรันจากไฟล์ local:**
 
 ```bash
-# 1. Clone repo
-git clone https://github.com/AnonymousVS/litespeed-cloudflare-api-email.git
-cd litespeed-cloudflare-api-email
-
-# 2. แก้ config
-nano replace-token-email.conf
-
-# 3. รัน
-bash replace-token-email.sh
+bash replace-token-email.sh [config-domain.csv] [config-api-key-token.csv]
 ```
 
----
+> ต้องรันด้วย **root** เพราะใช้ `wp-cli --allow-root`
 
-### วิธีที่ 3 — ระบุ config path เอง
+### 3. ตรวจสอบผลลัพธ์
+
+Script จะแสดงรายละเอียดก่อนรัน และขอ confirm ก่อนเริ่ม:
+
+```
+╔══════════════════════════════════════════════════════════════
+║   🔄  replace-token-email.sh  v2
+║   CSV-based — แต่ละโดเมนมี Email + Token ของตัวเอง
+╠══════════════════════════════════════════════════════════════
+║
+║   จำนวนโดเมน              : 5
+║   มี Token พร้อม          : 2
+║   ขาด Token               : 3
+║
+║   Domain                    Email                          Token
+║   supreme8888.com           seoteam16@gmail.com            ❌ ไม่มี
+║   ktv4s.org                 seoteam17@gmail.com            6a0a1968...1fd2f
+║   m4asia.net                seoteam18@gmail.com            3648ec5f...e2c3
+║
+╚══════════════════════════════════════════════════════════════
+
+  ▶  ยืนยันการเปลี่ยนค่า? [y/N] :
+```
+
+## ขั้นตอนการทำงาน
+
+Script จะทำงาน 10 ขั้นตอนต่อเว็บ:
+
+| Step | ทำอะไร | LiteSpeed Option |
+|------|--------|-----------------|
+| 1 | ตรวจ Plugin active | — |
+| 2 | อ่าน options ปัจจุบัน | — |
+| 3 | ค่าใหม่จาก CSV | — |
+| 4 | เปิด Cloudflare API = ON | `litespeed.conf.cdn-cloudflare` |
+| 5 | ใส่ API Token + Email + Domain | `cdn-cloudflare_key` / `_email` / `_name` |
+| 6 | เปิด CDN = ON | `litespeed.conf.cdn` |
+| 7 | เปิด Clear CF cache on purge all | `litespeed.conf.cdn-cloudflare_clear` |
+| 8 | ดึง Zone ID จาก CF API (= Save) | Cloudflare API v4 |
+| 9 | บันทึก Zone ID ลง DB | `cdn-cloudflare_zone` / `_name` |
+| 10 | Verify ทุกค่า | ตรวจ key + email + zone + cf_on |
+
+## สถานะผลลัพธ์
+
+| สถานะ | ความหมาย | Log File |
+|-------|----------|----------|
+| ✅ **PASS** | Zone ID แสดง = สำเร็จทั้งหมด | `lscwp-cf-update-pass.log` |
+| ⚠️ **WARN** | Key+Email ใส่แล้ว แต่ Zone ID ยังไม่แสดง | `lscwp-cf-update-warn.log` |
+| ❌ **FAIL** | Verify key/email ไม่ผ่าน หรือ wp eval ล้มเหลว | `lscwp-cf-update-fail.log` |
+| ⏭ **SKIP** | ไม่มี API Token / LiteSpeed Cache ไม่ active | `lscwp-cf-update-skip.log` |
+| 🔍 **NOT FOUND** | ไม่พบ WordPress directory บนเซิร์ฟเวอร์ | `lscwp-cf-update-notfound.log` |
+
+**Log files ทั้งหมดอยู่ที่:** `/var/log/lscwp-cf-update*.log`
 
 ```bash
-bash replace-token-email.sh /path/to/my-custom.conf
+# ดู log รวม
+cat /var/log/lscwp-cf-update.log
+
+# ดูเฉพาะที่สำเร็จ
+cat /var/log/lscwp-cf-update-pass.log
+
+# ดูเฉพาะ Zone ID ไม่แสดง
+cat /var/log/lscwp-cf-update-warn.log
+
+# ดูเฉพาะที่ล้มเหลว
+cat /var/log/lscwp-cf-update-fail.log
 ```
 
----
+## การป้องกัน Edge Cases
 
-## ตั้งค่าใน `replace-token-email.conf`
+| ป้องกัน | วิธีจัดการ |
+|---------|----------|
+| CSV ค้างจาก run เก่า | ดาวน์โหลดจาก GitHub ใหม่ทุกครั้ง + cache-busting |
+| GitHub CDN cache | ต่อ `?t=timestamp` ท้าย URL อัตโนมัติ |
+| Email ตัวพิมพ์ใหญ่/เล็กไม่ตรง | Lowercase ทั้ง email + domain ก่อน compare |
+| Domain ซ้ำใน CSV | แจ้งเตือน + ใช้ค่าจากแถวสุดท้าย |
+| Token มีอักขระพิเศษ | Validate + skip ถ้ามี `' " \ $ ; \|` |
+| Cloudflare API rate limit | หน่วง 1 วินาทีระหว่างเว็บ |
+| WP scan ช้า (4,000+ เว็บ) | แสดง progress ระหว่าง scan |
+| CF API timeout | Retry 3 ครั้ง (delay 5 วินาที) |
 
-```bash
-# โหมด Auth
-CF_AUTH_MODE="token"      # "token" หรือ "apikey"
+## ค่า Runtime (ปรับได้ใน script)
 
-# Credentials ใหม่
-CF_KEY="YOUR_API_TOKEN_OR_GLOBAL_KEY_HERE"
-CF_EMAIL=""               # ใส่เฉพาะตอน CF_AUTH_MODE=apikey
+| ตัวแปร | ค่า default | คำอธิบาย |
+|--------|------------|----------|
+| `MAX_JOBS` | 5 | จำนวนเว็บที่รัน parallel พร้อมกัน |
+| `WP_TIMEOUT` | 30 | Timeout ต่อเว็บ (วินาที) |
+| `MAX_RETRY` | 3 | จำนวนครั้ง retry CF API |
+| `RETRY_DELAY` | 5 | หน่วงระหว่าง retry (วินาที) |
+| `CF_API_DELAY` | 1 | หน่วงระหว่างเว็บ ป้องกัน rate limit (วินาที) |
 
-# ตัวเลือกเพิ่มเติม
-CF_CLEAR_ZONE="yes"       # ล้าง zone_id หลังเปลี่ยน key (แนะนำ yes)
-CF_ONLY_ACTIVE="no"       # yes = อัปเดตเฉพาะเว็บที่เปิด CF ไว้
-CF_OVERWRITE_KEY="yes"    # no  = ข้ามเว็บที่มี key อยู่แล้ว
-```
+## Requirements
 
-### `CF_AUTH_MODE`
+- **Root access** — ต้องรันด้วย root
+- **WP-CLI** — ต้องติดตั้ง ([wp-cli.org](https://wp-cli.org))
+- **cPanel / WHM** — รองรับ trueuserdomains, userdatadomains
+- **LiteSpeed Cache Plugin v7.0+** — ติดตั้งและ activate บนเว็บที่ต้องการ
+- **curl** — สำหรับดาวน์โหลด CSV และเรียก CF API
 
-| ค่า | ใช้เมื่อ | ต้องใส่ |
-|---|---|---|
-| `token` | ใช้ Cloudflare API Token | `CF_KEY` เท่านั้น |
-| `apikey` | ใช้ Global API Key แบบเดิม | `CF_KEY` + `CF_EMAIL` |
+## Changelog
 
----
+### v2 (ปัจจุบัน)
+- อ่าน config จาก 2 ไฟล์ CSV (แต่ละโดเมนมี token ของตัวเอง)
+- ประมวลผลเฉพาะโดเมนใน CSV
+- เปิด CF API + CDN + Clear CF cache อัตโนมัติ
+- เพิ่ม Zone ID verification
+- เพิ่ม WARN สำหรับ Zone ID ไม่แสดง
+- ดาวน์โหลด CSV ใหม่ทุกครั้ง + cache-busting
+- Email lowercase ก่อน compare
+- ตรวจจับ domain ซ้ำใน CSV
+- Validate token special characters
+- แสดง progress ตอน scan WordPress
+- Rate limit delay ระหว่างเว็บ
 
-## สิ่งที่ Script ทำ (ทีละขั้น)
+### v1
+- อ่าน config จาก `.conf` ไฟล์เดียว
+- ใส่ Key + Email เดียวกันให้ทุกเว็บบนเซิร์ฟเวอร์
 
-1. **ค้นหา WordPress** ทุกเว็บบนเซิร์ฟเวอร์ จาก `/etc/trueuserdomains` (WHM) และ `/home*`
-2. **ตรวจ LiteSpeed Cache** ว่า active อยู่ไหม — ถ้าไม่ → ข้าม
-3. **ตรวจเงื่อนไข** ตาม `CF_ONLY_ACTIVE` และ `CF_OVERWRITE_KEY`
-4. **เขียน credentials ใหม่** ลง WordPress DB โดยตรงผ่าน `update_option()`
-5. **ล้าง zone_id** (ถ้า `CF_CLEAR_ZONE=yes`) เพื่อให้ดึง zone ใหม่จาก key ใหม่
-6. **Verify** อ่านกลับมาตรวจว่าบันทึกจริง
-7. **รัน parallel** สูงสุด 5 เว็บพร้อมกัน
+## License
 
----
-
-## Status ที่จะเจอใน Log
-
-| สัญลักษณ์ | ความหมาย |
-|---|---|
-| ✅ `PASS` | อัปเดตสำเร็จ + verify ผ่าน |
-| ⏩ `NOCHANGE` | มี key อยู่แล้ว ข้ามตาม `CF_OVERWRITE_KEY=no` |
-| 🔴 `SKIP_CFOFF` | Cloudflare ปิดอยู่ใน plugin ข้ามตาม `CF_ONLY_ACTIVE=yes` |
-| ⏭ `SKIP` | LiteSpeed Cache ไม่ active |
-| ❌ `FAIL` | wp eval ล้มเหลว หรือ verify ไม่ผ่าน |
-
----
-
-## Log Files
-
-| ไฟล์ | เนื้อหา |
-|---|---|
-| `/var/log/lscwp-cf-update.log` | Log รวมทั้งหมด |
-| `/var/log/lscwp-cf-update-pass.log` | เว็บที่อัปเดตสำเร็จ |
-| `/var/log/lscwp-cf-update-fail.log` | เว็บที่ล้มเหลว |
-| `/var/log/lscwp-cf-update-nochange.log` | เว็บที่ข้าม (มี key แล้ว) |
-| `/var/log/lscwp-cf-update-skip.log` | เว็บที่ข้าม (plugin ไม่ active / CF ปิด) |
-
-> Log ทุกไฟล์จะถูก **ล้างทุกครั้งที่รัน** เก็บเฉพาะผลของ run ล่าสุด
-
----
-
-## ความต้องการของระบบ
-
-- Linux server (cPanel / WHM หรือ VPS ทั่วไป)
-- [WP-CLI](https://wp-cli.org) ติดตั้งและเรียกใช้ได้จาก `wp`
-- WordPress + LiteSpeed Cache Plugin (active)
-- รันในฐานะ `root` หรือผู้ใช้ที่มีสิทธิ์อ่าน home directory ทุก user
-
----
-
-## ตัวอย่าง Output
-
-```
-======================================
- BULK UPDATE CF CREDENTIALS (LiteSpeed)
- เริ่มเวลา    : 2025-03-06 10:00:00
- Auth Mode    : token
- Key (prefix) : abcd1234...
- Clear Zone   : yes
-======================================
-พบ WordPress  : 47 เว็บ
-======================================
-✅ PASS: [1/47] user1/public_html/site1.com | domain=site1.com | key: oldkey1... → abcd1234... | zone: abc123... → (cleared)
-✅ PASS: [2/47] user2/public_html/site2.com | domain=site2.com | key: oldkey2... → abcd1234...
-⏭  SKIP (LiteSpeed Cache ไม่ active): [3/47] user3/public_html/newsite.com
-...
-======================================
- สรุปผลรวม
- รวมทั้งหมด      : 47 เว็บ
- ✅ Pass (อัปเดต) : 43 เว็บ
- ⏩ Nochange       : 0  เว็บ
- ❌ Fail          : 1  เว็บ
- ⏭  Skip          : 3  เว็บ
- เวลาที่ใช้       : 2 นาที 18 วินาที
-======================================
-```
----
 MIT
