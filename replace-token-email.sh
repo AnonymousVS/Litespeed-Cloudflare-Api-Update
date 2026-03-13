@@ -23,11 +23,12 @@
 
 VERSION="v2"
 
-# ─── URL ของ CSV บน GitHub (ใช้ refs/heads/main เพื่อลด cache) ──
-DOMAIN_CSV_URL="https://raw.githubusercontent.com/AnonymousVS/litespeed-cloudflare-api-email/refs/heads/main/config-domain.csv"
-TOKEN_CSV_URL="https://raw.githubusercontent.com/AnonymousVS/litespeed-cloudflare-api-email/refs/heads/main/config-api-key-token.csv"
+# ─── URL ของ CSV บน GitHub ────────────────────────────────────
+GITHUB_REPO="AnonymousVS/litespeed-cloudflare-api-email"
+DOMAIN_CSV_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/refs/heads/main/config-domain.csv"
+TOKEN_CSV_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/refs/heads/main/config-api-key-token.csv"
 
-# ─── Cache-busting: ต่อ ?t=timestamp ให้ GitHub ส่งไฟล์ล่าสุดทุกครั้ง ─
+# ─── Cache-busting: ต่อ ?t=timestamp ─
 _TS="?t=$(date +%s)"
 DOMAIN_CSV_URL="${DOMAIN_CSV_URL}${_TS}"
 TOKEN_CSV_URL="${TOKEN_CSV_URL}${_TS}"
@@ -39,7 +40,14 @@ TOKEN_CSV="${2:-/root/config-api-key-token.csv}"
 # ─── ลบ CSV local เก่า → บังคับดาวน์โหลดใหม่จาก GitHub ──────
 rm -f "$DOMAIN_CSV" "$TOKEN_CSV"
 
-# ─── ดาวน์โหลด CSV จาก GitHub ทุกครั้ง (ให้ได้ค่าล่าสุด) ────
+# ─── Purge GitHub CDN cache (ลองทำ — ถ้าไม่ได้ก็ไม่เป็นไร) ──
+echo "🗑  Purge GitHub CDN cache..."
+_PURGE_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/refs/heads/main"
+curl -sS -X PURGE "${_PURGE_BASE}/config-domain.csv"        >/dev/null 2>&1 && echo "   ✅ config-domain.csv" || echo "   ⏭  config-domain.csv (skip)"
+curl -sS -X PURGE "${_PURGE_BASE}/config-api-key-token.csv"  >/dev/null 2>&1 && echo "   ✅ config-api-key-token.csv" || echo "   ⏭  config-api-key-token.csv (skip)"
+sleep 1  # รอ 1 วินาทีให้ CDN ประมวลผล
+
+# ─── ดาวน์โหลด CSV จาก GitHub ────────────────────────────────
 download_csv() {
     local file="$1" url="$2" label="$3"
     echo "📥 ดาวน์โหลด $label จาก GitHub..."
