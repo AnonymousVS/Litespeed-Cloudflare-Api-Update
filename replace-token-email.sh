@@ -359,9 +359,9 @@ process_domain() {
         $cur_name     = trim((string) get_option("litespeed.conf.cdn-cloudflare_name",   ""));
 
         // ── 3. ค่าใหม่จาก CSV ────────────────────────────────
-        $new_key    = '"'"'$cf_token'"'"';
-        $new_email  = '"'"'$cf_email'"'"';
-        $new_domain = '"'"'$domain'"'"';
+        $new_key    = '"'$cf_token'"';
+        $new_email  = '"'$cf_email'"';
+        $new_domain = '"'$domain'"';
 
         // ══════════════════════════════════════════════════════
         // ── 4. เปิด Cloudflare API (Turn ON) ─────────────────
@@ -404,8 +404,8 @@ process_domain() {
         //    ถ้า Zone ID แสดง = Success
         //    ถ้า Zone ID ไม่แสดง = Key+Email ใส่แล้ว แต่ Zone ยังไม่ได้
         // ══════════════════════════════════════════════════════
-        $max_retry   = '"'"'$MAX_RETRY'"'"';
-        $retry_delay = '"'"'$RETRY_DELAY'"'"';
+        $max_retry   = '"'$MAX_RETRY'"';
+        $retry_delay = '"'$RETRY_DELAY'"';
         $zone_id     = "";
         $zone_name   = "";
         $cf_error    = "";
