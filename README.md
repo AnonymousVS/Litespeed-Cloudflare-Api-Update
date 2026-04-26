@@ -3,6 +3,9 @@
 Bash script สำหรับอัปเดต **Cloudflare API Token** ให้กับ WordPress ทุกเว็บบนเซิร์ฟเวอร์ ผ่าน **LiteSpeed Cache Plugin → CDN → Cloudflare** รองรับหลาย Cloudflare Account (คนละ email คนละ token)
 
 ## คำสั่งรัน
+```bash
+https://drive.google.com/file/d/1nNZx0-evfkHVvaXNTgBdoB4gtI3_dUiw/view?usp=drive_link
+```
 
 ```bash
 GH_TOKEN="ghp_xxxxx"
