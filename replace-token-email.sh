@@ -459,31 +459,21 @@ process_site() {
     wp --path="$dir" litespeed-option set cdn 1 --allow-root >/dev/null 2>&1
 
     # ── 7. ดึง Zone ID จาก Cloudflare API (bash curl) ────────
+    # ใช้ pipe ตรงเหมือน website-daily-create.sh (ง่าย ไม่มี bug)
     local zone_id="" zone_name="" cf_error="" attempt=0
     while [[ $attempt -lt $MAX_RETRY ]]; do
         attempt=$((attempt+1))
 
-        local raw http_code
-        raw=$(curl -s -w "\n%{http_code}" -X GET \
-            "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
+        local cf_response
+        cf_response=$(curl -s "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
             -H "Authorization: Bearer $SITE_CF_TOKEN" \
             -H "Content-Type: application/json" 2>/dev/null)
 
-        http_code=$(echo "$raw" | tail -1)
-        local body
-        body=$(echo "$raw" | sed '$d')
-
-        if [[ "$http_code" != "200" ]]; then
-            cf_error="http:$http_code"
-            [[ $attempt -lt $MAX_RETRY ]] && sleep "$RETRY_DELAY"
-            continue
-        fi
-
-        zone_id=$(echo "$body" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        zone_name=$(echo "$body" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
-        [[ -z "$zone_name" ]] && zone_name="$DOMAIN"
+        zone_id=$(echo "$cf_response" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 
         if [[ -n "$zone_id" ]]; then
+            zone_name=$(echo "$cf_response" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
+            [[ -z "$zone_name" ]] && zone_name="$DOMAIN"
             break
         fi
 
