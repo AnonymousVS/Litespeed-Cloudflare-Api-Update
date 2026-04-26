@@ -1,10 +1,10 @@
 #!/bin/bash
 # =============================================================
-#  replace-token-email.sh v4
+#  replace-token-email.sh v4.1
 #  Bulk Update Cloudflare API Token
 #  LiteSpeed Cache › CDN › Cloudflare
 # ============================================================
-#  Updated: 2026-04-27 19:00 (UTC+7)
+#  Updated: 2026-04-27 06:39 (UTC+7)
 #  Repo   : https://github.com/AnonymousVS/Litespeed-Cloudflare-Api-Update
 # =============================================================
 # ไฟล์ Config (3 ไฟล์):
@@ -28,6 +28,11 @@
 #   bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Litespeed-Cloudflare-Api-Update/main/replace-token-email.sh)
 # =============================================================
 # CHANGELOG:
+# v4.1 (2026-04-27)
+#   - Fix: Zone ID ใช้ wp option update (bypass LiteSpeed hooks ที่ reset zone)
+#   - Fix: curl ใช้ pipe ตรง (ไม่แยก http_code — เหมือน website-daily-create.sh)
+#   - Fix: Telegram HTML mode + แสดง error จริง
+#   - Fix: litespeed-option set redirect stdout (ไม่รกจอ)
 # v4 (2026-04-27)
 #   - Rewrite: ใช้ litespeed-option set แทน wp eval (เหมือน website-daily-create.sh)
 #   - Fix: bash variable quoting bug 6 จุด (ตัวแปรไม่ expand ใน PHP eval)
@@ -46,7 +51,7 @@
 #   - Single config file, auto-detect จาก CF_EMAIL
 # =============================================================
 
-VERSION="v4"
+VERSION="v4.1"
 PRIVATE_REPO="AnonymousVS/config"
 PUBLIC_REPO="AnonymousVS/Litespeed-Cloudflare-Api-Update"
 CF_TOKEN_FILE="Litespeed-Cloudflare-Api-Update.conf"
@@ -481,10 +486,12 @@ process_site() {
         [[ $attempt -lt $MAX_RETRY ]] && sleep "$RETRY_DELAY"
     done
 
-    # ── 8. บันทึก Zone ID (litespeed-option set เหมือน Step 6) ─
+    # ── 8. บันทึก Zone ID (wp option update — bypass plugin hooks) ─
+    # หมายเหตุ: litespeed-option set จะ trigger plugin save handler
+    #           ซึ่ง reset zone เป็นว่าง → ต้องใช้ wp option update แทน
     if [[ -n "$zone_id" ]]; then
-        wp --path="$dir" litespeed-option set cdn-cloudflare_zone "$zone_id" --allow-root >/dev/null 2>&1
-        wp --path="$dir" litespeed-option set cdn-cloudflare_name "$zone_name" --allow-root >/dev/null 2>&1
+        wp --path="$dir" option update litespeed.conf.cdn-cloudflare_zone "$zone_id" --allow-root >/dev/null 2>&1
+        wp --path="$dir" option update litespeed.conf.cdn-cloudflare_name "$zone_name" --allow-root >/dev/null 2>&1
     fi
 
     # ── 9. Verify ─────────────────────────────────────────────
