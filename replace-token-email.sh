@@ -1,10 +1,10 @@
 #!/bin/bash
 # =============================================================
-#  replace-token-email.sh v3.1
+#  replace-token-email.sh v4
 #  Bulk Update Cloudflare API Token
 #  LiteSpeed Cache › CDN › Cloudflare
 # ============================================================
-#  Updated: 2026-04-21 19:00 (UTC+7)
+#  Updated: 2026-04-27 19:00 (UTC+7)
 #  Repo   : https://github.com/AnonymousVS/Litespeed-Cloudflare-Api-Update
 # =============================================================
 # ไฟล์ Config (3 ไฟล์):
@@ -28,11 +28,14 @@
 #   bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Litespeed-Cloudflare-Api-Update/main/replace-token-email.sh)
 # =============================================================
 # CHANGELOG:
-# v3.1 (2026-04-21)
+# v4 (2026-04-27)
+#   - Rewrite: ใช้ litespeed-option set แทน wp eval (เหมือน website-daily-create.sh)
+#   - Fix: bash variable quoting bug 6 จุด (ตัวแปรไม่ expand ใน PHP eval)
+#   - Fix: Telegram แสดง token ในจอ
 #   - เพิ่ม domains.csv: ระบุ domain + Cloudflare email เฉพาะเจาะจง
 #   - Multi-token: แต่ละ CF account มี token ของตัวเอง (CF_TOKENS map)
 #   - Backward compatible: CF_TOKEN เดียวยังใช้ได้ (Format A)
-#   - per-domain email + token: ดึง Zone ID ด้วย token ที่ถูกต้อง
+#   - per-domain email + token: ดึง Zone ID ด้วย token ที่ถูก account
 #   - domains.csv ว่าง/ไม่มี = แก้ทุกเว็บ + ใช้ _default token
 #   - Repo ย้ายไป AnonymousVS/Litespeed-Cloudflare-Api-Update
 # v3 (2026-04-20)
@@ -43,7 +46,7 @@
 #   - Single config file, auto-detect จาก CF_EMAIL
 # =============================================================
 
-VERSION="v3.1"
+VERSION="v4"
 PRIVATE_REPO="AnonymousVS/config"
 PUBLIC_REPO="AnonymousVS/Litespeed-Cloudflare-Api-Update"
 CF_TOKEN_FILE="Litespeed-Cloudflare-Api-Update.conf"
@@ -206,7 +209,7 @@ echo "║   cPanel Users :  ${CPANEL_USERS:-"(ทุก user บน server)"}"
 echo "║   domains.csv  :  ${TARGET_DOMAIN_COUNT:-0} domains ${TARGET_DOMAIN_COUNT:+(เฉพาะ domain ที่ระบุ)}"
 echo "║   Only Active  :  $CF_ONLY_ACTIVE"
 echo "║   Overwrite Key:  $CF_OVERWRITE_KEY"
-echo "║   Telegram     :  ${TELEGRAM_BOT_TOKEN:+ON}${TELEGRAM_BOT_TOKEN:-OFF}"
+echo "║   Telegram     :  $( [[ -n "$TELEGRAM_BOT_TOKEN" ]] && echo "ON" || echo "OFF" )"
 echo "║"
 echo "╚══════════════════════════════════════════════════════════════"
 echo ""
@@ -278,7 +281,7 @@ log " Auth Mode    : Bearer (WordPress API Token cfut_)"
 log " cPanel Users : ${CPANEL_USERS:-"(ทุก user บน server)"}"
 log " Only Active  : $CF_ONLY_ACTIVE"
 log " Overwrite Key: $CF_OVERWRITE_KEY"
-log " Telegram     : ${TELEGRAM_BOT_TOKEN:+ON}${TELEGRAM_BOT_TOKEN:-OFF}"
+log " Telegram     : $( [[ -n "$TELEGRAM_BOT_TOKEN" ]] && echo "ON" || echo "OFF" )"
 log " Jobs         : $MAX_JOBS"
 log "======================================"
 
@@ -403,191 +406,134 @@ process_site() {
         esac
     }
 
-    EVAL_OUT=$(timeout "$WP_TIMEOUT" wp --path="$dir" eval '
-        // ── 1. Plugin active? ────────────────────────────────
-        if (!is_plugin_active("litespeed-cache/litespeed-cache.php")) {
-            echo "STATUS:NOPLUGIN"; return;
-        }
+    # ── 1. Plugin active? ─────────────────────────────────────
+    if ! wp --path="$dir" plugin is-active litespeed-cache --allow-root 2>/dev/null; then
+        _log  "⏭  SKIP (LiteSpeed Cache ไม่ active): $LABEL"
+        _log_r skip "$SITE | plugin ไม่ active"
+        touch "${RESULT_DIR}/skip_${UNIQ}"
+        return
+    fi
 
-        // ── 2. อ่าน options ปัจจุบัน ─────────────────────────
-        $cur_enabled = get_option("litespeed.conf.cdn-cloudflare",       "0");
-        $cur_key     = trim((string) get_option("litespeed.conf.cdn-cloudflare_key",   ""));
-        $cur_email   = trim((string) get_option("litespeed.conf.cdn-cloudflare_email", ""));
-        $cur_zone    = trim((string) get_option("litespeed.conf.cdn-cloudflare_zone",  ""));
-        $cur_name    = trim((string) get_option("litespeed.conf.cdn-cloudflare_name",  ""));
+    # ── 2. อ่าน options ปัจจุบัน ──────────────────────────────
+    local cur_enabled cur_key cur_email cur_zone cur_name
+    cur_enabled=$(wp --path="$dir" option get litespeed.conf.cdn-cloudflare --allow-root 2>/dev/null || echo "0")
+    cur_key=$(wp --path="$dir" option get litespeed.conf.cdn-cloudflare_key --allow-root 2>/dev/null || echo "")
+    cur_email=$(wp --path="$dir" option get litespeed.conf.cdn-cloudflare_email --allow-root 2>/dev/null || echo "")
+    cur_zone=$(wp --path="$dir" option get litespeed.conf.cdn-cloudflare_zone --allow-root 2>/dev/null || echo "")
+    cur_name=$(wp --path="$dir" option get litespeed.conf.cdn-cloudflare_name --allow-root 2>/dev/null || echo "")
 
-        // ── 3. CF_ONLY_ACTIVE : ข้ามถ้า CF ปิดอยู่ ───────────
-        $only_active = ('"'"'$CF_ONLY_ACTIVE'"'"' === "yes");
-        if ($only_active && (!$cur_enabled || $cur_enabled === "0")) {
-            echo "STATUS:SKIP_CFOFF"; return;
-        }
+    # ── 3. CF_ONLY_ACTIVE: ข้ามถ้า CF ปิดอยู่ ────────────────
+    if [[ "$CF_ONLY_ACTIVE" == "yes" && ( -z "$cur_enabled" || "$cur_enabled" == "0" ) ]]; then
+        _log  "🔴 SKIP (CF ปิดอยู่): $LABEL"
+        _log_r skip "$SITE | Cloudflare=OFF ใน plugin — ข้ามตาม CF_ONLY_ACTIVE=yes"
+        touch "${RESULT_DIR}/skip_${UNIQ}"
+        return
+    fi
 
-        // ── 4. CF_OVERWRITE_KEY : ข้ามถ้ามี key อยู่แล้ว ────
-        $overwrite = ('"'"'$CF_OVERWRITE_KEY'"'"' === "yes");
-        if (!$overwrite && $cur_key !== "") {
-            printf("STATUS:NOCHANGE\tOLD_KEY:%s\tDOMAIN:%s", substr($cur_key,0,8), $cur_name);
-            return;
-        }
+    # ── 4. CF_OVERWRITE_KEY: ข้ามถ้ามี key อยู่แล้ว ──────────
+    if [[ "$CF_OVERWRITE_KEY" != "yes" && -n "$cur_key" ]]; then
+        _log  "⏩ NOCHANGE: $LABEL | domain=$cur_name | มี key อยู่แล้ว (${cur_key:0:8}...) ข้ามไป"
+        _log_r nochange "$SITE | domain=$cur_name | existing_key=${cur_key:0:8}..."
+        touch "${RESULT_DIR}/nochange_${UNIQ}"
+        return
+    fi
 
-        // ── 5. Auto-fix domain ให้ตรงกับ folder ──────────────
-        $folder = basename(rtrim(ABSPATH, "/"));
-        if ($folder === "public_html") {
-            $folder = basename(dirname(rtrim(ABSPATH, "/")));
-        }
-        $name_clean = preg_replace("#^https?://#", "", rtrim($cur_name, "/"));
-        $was_fixed  = false;
-        if ($folder && $name_clean && $folder !== $name_clean) {
-            $cur_name  = $folder;
-            $was_fixed = true;
-        }
+    # ── 5. Auto-fix domain จาก folder name ────────────────────
+    local folder_name DOMAIN was_fixed="0"
+    folder_name=$(basename "${dir%/}")
+    [[ "$folder_name" == "public_html" ]] && folder_name=$(basename "$(dirname "${dir%/}")")
 
-        // ── 6. เขียน Credentials ใหม่ลง DB ───────────────────
-        $new_key   = '"'"'$SITE_CF_TOKEN'"'"';
-        $new_email = '"'"'$SITE_CF_EMAIL'"'"';
+    DOMAIN="$cur_name"
+    if [[ -n "$folder_name" && -n "$cur_name" && "$folder_name" != "$cur_name" ]]; then
+        DOMAIN="$folder_name"
+        was_fixed="1"
+    fi
+    [[ -z "$DOMAIN" ]] && DOMAIN="$folder_name"
 
-        update_option("litespeed.conf.cdn-cloudflare",      "1");
-        update_option("litespeed.conf.cdn-cloudflare_key",   $new_key);
-        update_option("litespeed.conf.cdn-cloudflare_email", $new_email);
-        update_option("litespeed.conf.cdn-cloudflare_name",  $cur_name);
-        update_option("litespeed.conf.cdn-cloudflare_zone",  "");
-        update_option("litespeed.conf.cdn-cloudflare_clear", "1");
-        update_option("litespeed.conf.cdn",                  "1");
+    # ── 6. เขียน Credentials (litespeed-option set) ──────────
+    wp --path="$dir" litespeed-option set cdn-cloudflare 1 --allow-root 2>/dev/null
+    wp --path="$dir" litespeed-option set cdn-cloudflare_key "$SITE_CF_TOKEN" --allow-root 2>/dev/null
+    wp --path="$dir" litespeed-option set cdn-cloudflare_email "$SITE_CF_EMAIL" --allow-root 2>/dev/null
+    wp --path="$dir" litespeed-option set cdn-cloudflare_name "$DOMAIN" --allow-root 2>/dev/null
+    wp --path="$dir" litespeed-option set cdn-cloudflare_clear 1 --allow-root 2>/dev/null
+    wp --path="$dir" litespeed-option set cdn 1 --allow-root 2>/dev/null
 
-        // ── 7. ดึง Zone ID จาก Cloudflare API ────────────────
-        $max_retry   = '"'"'$MAX_RETRY'"'"';
-        $retry_delay = '"'"'$RETRY_DELAY'"'"';
-        $zone_id     = "";
-        $zone_name   = "";
-        $cf_error    = "";
-        $attempt     = 0;
+    # ── 7. ดึง Zone ID จาก Cloudflare API (bash curl) ────────
+    local zone_id="" zone_name="" cf_error="" attempt=0
+    while [[ $attempt -lt $MAX_RETRY ]]; do
+        attempt=$((attempt+1))
 
-        // Bearer auth เท่านั้น (WordPress API Token)
-        $headers = ["Authorization: Bearer $new_key", "Content-Type: application/json"];
+        local raw http_code
+        raw=$(curl -s -w "\n%{http_code}" -X GET \
+            "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
+            -H "Authorization: Bearer $SITE_CF_TOKEN" \
+            -H "Content-Type: application/json" 2>/dev/null)
 
-        while ($attempt < $max_retry) {
-            $attempt++;
-            $url = "https://api.cloudflare.com/client/v4/zones?status=active&match=all&name=" . urlencode($cur_name);
-            $ch  = curl_init();
-            curl_setopt($ch, CURLOPT_URL,            $url);
-            curl_setopt($ch, CURLOPT_HTTPHEADER,     $headers);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_TIMEOUT,        10);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-            $raw      = curl_exec($ch);
-            $http     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $curl_err = curl_error($ch);
-            curl_close($ch);
+        http_code=$(echo "$raw" | tail -1)
+        local body
+        body=$(echo "$raw" | sed '$d')
 
-            if ($curl_err) {
-                $cf_error = "curl:" . $curl_err;
-                if ($attempt < $max_retry) { sleep($retry_delay); continue; }
-                break;
-            }
-            $res = json_decode($raw, true);
-            if ($http !== 200 || empty($res["success"])) {
-                $cf_error = "http:" . $http . " err:" . json_encode($res["errors"] ?? []);
-                if ($attempt < $max_retry) { sleep($retry_delay); continue; }
-                break;
-            }
-            $zone_id   = $res["result"][0]["id"]   ?? "";
-            $zone_name = $res["result"][0]["name"] ?? $cur_name;
-            if ($zone_id) break;
-            $cf_error = "zone_empty";
-            if ($attempt < $max_retry) sleep($retry_delay);
-        }
+        if [[ "$http_code" != "200" ]]; then
+            cf_error="http:$http_code"
+            [[ $attempt -lt $MAX_RETRY ]] && sleep "$RETRY_DELAY"
+            continue
+        fi
 
-        // ── 8. บันทึก Zone ID ลง DB ──────────────────────────
-        if ($zone_id) {
-            update_option("litespeed.conf.cdn-cloudflare_zone", $zone_id);
-            update_option("litespeed.conf.cdn-cloudflare_name", $zone_name);
-        }
+        zone_id=$(echo "$body" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+        zone_name=$(echo "$body" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
+        [[ -z "$zone_name" ]] && zone_name="$DOMAIN"
 
-        // ── 9. Verify ─────────────────────────────────────────
-        $v_key   = trim((string) get_option("litespeed.conf.cdn-cloudflare_key",   ""));
-        $v_zone  = trim((string) get_option("litespeed.conf.cdn-cloudflare_zone",  ""));
-        $v_email = trim((string) get_option("litespeed.conf.cdn-cloudflare_email", ""));
-        $key_ok  = ($v_key === $new_key) ? 1 : 0;
+        if [[ -n "$zone_id" ]]; then
+            break
+        fi
 
-        printf(
-            "STATUS:DONE\tKEY_OK:%d\tDOMAIN:%s\tOLD_KEY:%s\tNEW_KEY:%s\tOLD_EMAIL:%s\tNEW_EMAIL:%s\tOLD_ZONE:%s\tNEW_ZONE:%s\tFIXED:%d\tATTEMPT:%d\tCF_ERROR:%s",
-            $key_ok,
-            $zone_name ?: $cur_name,
-            substr($cur_key,  0, 8),
-            substr($v_key,    0, 8),
-            $cur_email,
-            $v_email,
-            $cur_zone ? substr($cur_zone, 0, 12)."..." : "(empty)",
-            $v_zone   ?: "(no zone)",
-            $was_fixed ? 1 : 0,
-            $attempt,
-            $cf_error
-        );
-    ' --allow-root 2>/dev/null)
+        cf_error="zone_empty"
+        [[ $attempt -lt $MAX_RETRY ]] && sleep "$RETRY_DELAY"
+    done
 
-    local STATUS
-    STATUS=$(echo "$EVAL_OUT" | grep -oP '(?<=STATUS:)\w+')
+    # ── 8. บันทึก Zone ID ─────────────────────────────────────
+    if [[ -n "$zone_id" ]]; then
+        wp --path="$dir" eval \
+            "update_option('litespeed.conf.cdn-cloudflare_zone', '$zone_id');" \
+            --allow-root 2>/dev/null
+        wp --path="$dir" litespeed-option set cdn-cloudflare_name "$zone_name" --allow-root 2>/dev/null
+    fi
 
-    case "$STATUS" in
-        DONE)
-            local KEY_OK DOMAIN OLD_KEY NEW_KEY OLD_EMAIL NEW_EMAIL OLD_ZONE NEW_ZONE FIXED ATTEMPT CF_ERROR
-            KEY_OK=$(    echo "$EVAL_OUT" | grep -oP '(?<=KEY_OK:)\d+')
-            DOMAIN=$(    echo "$EVAL_OUT" | grep -oP '(?<=DOMAIN:)[^\t]*')
-            OLD_KEY=$(   echo "$EVAL_OUT" | grep -oP '(?<=OLD_KEY:)[^\t]*')
-            NEW_KEY=$(   echo "$EVAL_OUT" | grep -oP '(?<=NEW_KEY:)[^\t]*')
-            OLD_EMAIL=$( echo "$EVAL_OUT" | grep -oP '(?<=OLD_EMAIL:)[^\t]*')
-            NEW_EMAIL=$( echo "$EVAL_OUT" | grep -oP '(?<=NEW_EMAIL:)[^\t]*')
-            OLD_ZONE=$(  echo "$EVAL_OUT" | grep -oP '(?<=OLD_ZONE:)[^\t]*')
-            NEW_ZONE=$(  echo "$EVAL_OUT" | grep -oP '(?<=NEW_ZONE:)[^\t]*')
-            FIXED=$(     echo "$EVAL_OUT" | grep -oP '(?<=FIXED:)\d+')
-            ATTEMPT=$(   echo "$EVAL_OUT" | grep -oP '(?<=ATTEMPT:)\d+')
-            CF_ERROR=$(  echo "$EVAL_OUT" | grep -oP '(?<=CF_ERROR:)[^\t]*')
-            local FIX_TAG=""
-            [[ "$FIXED" == "1" ]] && FIX_TAG=" | ⚙️ domain ถูกแก้อัตโนมัติ"
+    # ── 9. Verify ─────────────────────────────────────────────
+    local v_key v_zone v_email key_ok="0"
+    v_key=$(wp --path="$dir" option get litespeed.conf.cdn-cloudflare_key --allow-root 2>/dev/null || echo "")
+    v_zone=$(wp --path="$dir" option get litespeed.conf.cdn-cloudflare_zone --allow-root 2>/dev/null || echo "")
+    v_email=$(wp --path="$dir" option get litespeed.conf.cdn-cloudflare_email --allow-root 2>/dev/null || echo "")
+    [[ "$v_key" == "$SITE_CF_TOKEN" ]] && key_ok="1"
 
-            if [[ "$KEY_OK" == "1" && "$NEW_ZONE" != "(no zone)" ]]; then
-                _log  "✅ PASS: $LABEL | domain=$DOMAIN | key: ${OLD_KEY}... → ${NEW_KEY}... | zone: $OLD_ZONE → $NEW_ZONE | attempt=${ATTEMPT}/${MAX_RETRY}${FIX_TAG}"
-                _log_r pass "$SITE | domain=$DOMAIN | old_key=${OLD_KEY}... | new_key=${NEW_KEY}... | old_email=$OLD_EMAIL | new_email=$NEW_EMAIL | zone: $OLD_ZONE → $NEW_ZONE | attempt=${ATTEMPT}/${MAX_RETRY}${FIX_TAG}"
-                [[ "$FIXED" == "1" ]] && _log_r mismatch "$SITE | domain ถูกแก้อัตโนมัติ → $DOMAIN"
-                touch "${RESULT_DIR}/pass_${UNIQ}"
-                [[ "$FIXED" == "1" ]] && touch "${RESULT_DIR}/mismatch_${UNIQ}"
-            elif [[ "$KEY_OK" == "1" && "$CF_ERROR" == "zone_empty" ]]; then
-                _log  "🌐 NOTCF: $LABEL | domain=$DOMAIN | domain ไม่อยู่ใน CF account${FIX_TAG}"
-                _log_r fail "$SITE | domain=$DOMAIN | key อัปเดตแล้ว แต่ domain ไม่อยู่ใน CF | attempt=${ATTEMPT}/${MAX_RETRY}${FIX_TAG}"
-                touch "${RESULT_DIR}/fail_${UNIQ}"
-            elif [[ "$KEY_OK" == "1" ]]; then
-                _log  "❌ FAIL (CF API error): $LABEL | domain=$DOMAIN | error=$CF_ERROR | attempt=${ATTEMPT}/${MAX_RETRY}${FIX_TAG}"
-                _log_r fail "$SITE | domain=$DOMAIN | key อัปเดตแล้ว แต่ดึง zone ไม่ได้ | error=$CF_ERROR | attempt=${ATTEMPT}/${MAX_RETRY}${FIX_TAG}"
-                touch "${RESULT_DIR}/fail_${UNIQ}"
-            else
-                _log  "❌ FAIL (verify key ไม่ผ่าน): $LABEL | domain=$DOMAIN${FIX_TAG}"
-                _log_r fail "$SITE | domain=$DOMAIN | verify failed — key ไม่ตรง${FIX_TAG}"
-                touch "${RESULT_DIR}/fail_${UNIQ}"
-            fi
-            ;;
-        NOCHANGE)
-            local OLD_KEY DOMAIN
-            OLD_KEY=$(echo "$EVAL_OUT" | grep -oP '(?<=OLD_KEY:)[^\t]*')
-            DOMAIN=$( echo "$EVAL_OUT" | grep -oP '(?<=DOMAIN:)[^\t]*')
-            _log  "⏩ NOCHANGE: $LABEL | domain=$DOMAIN | มี key อยู่แล้ว (${OLD_KEY}...) ข้ามไป"
-            _log_r nochange "$SITE | domain=$DOMAIN | existing_key=${OLD_KEY}..."
-            touch "${RESULT_DIR}/nochange_${UNIQ}"
-            ;;
-        SKIP_CFOFF)
-            _log  "🔴 SKIP (CF ปิดอยู่): $LABEL"
-            _log_r skip "$SITE | Cloudflare=OFF ใน plugin — ข้ามตาม CF_ONLY_ACTIVE=yes"
-            touch "${RESULT_DIR}/skip_${UNIQ}"
-            ;;
-        NOPLUGIN)
-            _log  "⏭  SKIP (LiteSpeed Cache ไม่ active): $LABEL"
-            _log_r skip "$SITE | plugin ไม่ active"
-            touch "${RESULT_DIR}/skip_${UNIQ}"
-            ;;
-        *)
-            _log  "❌ FAIL (wp error/timeout): $LABEL | ${EVAL_OUT:0:120}"
-            _log_r fail "$SITE | wp eval ล้มเหลว | ${EVAL_OUT:0:120}"
-            touch "${RESULT_DIR}/fail_${UNIQ}"
-            ;;
-    esac
+    # ── 10. Log ผลลัพธ์ ───────────────────────────────────────
+    local FIX_TAG=""
+    [[ "$was_fixed" == "1" ]] && FIX_TAG=" | ⚙️ domain ถูกแก้อัตโนมัติ"
+
+    local OLD_ZONE_DISPLAY="${cur_zone:0:12}"
+    [[ -z "$OLD_ZONE_DISPLAY" ]] && OLD_ZONE_DISPLAY="(empty)"
+    local NEW_ZONE_DISPLAY="$v_zone"
+    [[ -z "$NEW_ZONE_DISPLAY" ]] && NEW_ZONE_DISPLAY="(no zone)"
+
+    if [[ "$key_ok" == "1" && -n "$v_zone" ]]; then
+        _log  "✅ PASS: $LABEL | domain=$DOMAIN | key: ${cur_key:0:8}... → ${v_key:0:8}... | zone: $OLD_ZONE_DISPLAY → $NEW_ZONE_DISPLAY | attempt=${attempt}/${MAX_RETRY}${FIX_TAG}"
+        _log_r pass "$SITE | domain=$DOMAIN | old_key=${cur_key:0:8}... | new_key=${v_key:0:8}... | old_email=$cur_email | new_email=$v_email | zone: $OLD_ZONE_DISPLAY → $NEW_ZONE_DISPLAY | attempt=${attempt}/${MAX_RETRY}${FIX_TAG}"
+        [[ "$was_fixed" == "1" ]] && _log_r mismatch "$SITE | domain ถูกแก้อัตโนมัติ → $DOMAIN"
+        touch "${RESULT_DIR}/pass_${UNIQ}"
+        [[ "$was_fixed" == "1" ]] && touch "${RESULT_DIR}/mismatch_${UNIQ}"
+    elif [[ "$key_ok" == "1" && "$cf_error" == "zone_empty" ]]; then
+        _log  "🌐 NOTCF: $LABEL | domain=$DOMAIN | domain ไม่อยู่ใน CF account${FIX_TAG}"
+        _log_r fail "$SITE | domain=$DOMAIN | key อัปเดตแล้ว แต่ domain ไม่อยู่ใน CF | attempt=${attempt}/${MAX_RETRY}${FIX_TAG}"
+        touch "${RESULT_DIR}/fail_${UNIQ}"
+    elif [[ "$key_ok" == "1" ]]; then
+        _log  "❌ FAIL (CF API error): $LABEL | domain=$DOMAIN | error=$cf_error | attempt=${attempt}/${MAX_RETRY}${FIX_TAG}"
+        _log_r fail "$SITE | domain=$DOMAIN | key อัปเดตแล้ว แต่ดึง zone ไม่ได้ | error=$cf_error | attempt=${attempt}/${MAX_RETRY}${FIX_TAG}"
+        touch "${RESULT_DIR}/fail_${UNIQ}"
+    else
+        _log  "❌ FAIL (verify key ไม่ผ่าน): $LABEL | domain=$DOMAIN${FIX_TAG}"
+        _log_r fail "$SITE | domain=$DOMAIN | verify failed — key ไม่ตรง${FIX_TAG}"
+        touch "${RESULT_DIR}/fail_${UNIQ}"
+    fi
 }
 
 export -f process_site
