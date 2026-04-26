@@ -1,20 +1,24 @@
 # LiteSpeed Cache — Cloudflare API Token Bulk Update
 
-Bash script สำหรับอัปเดต **Cloudflare API Token** ให้กับ WordPress ทุกเว็บบนเซิร์ฟเวอร์ ผ่าน **LiteSpeed Cache Plugin → CDN → Cloudflare**
+Bash script สำหรับอัปเดต **Cloudflare API Token** ให้กับ WordPress ทุกเว็บบนเซิร์ฟเวอร์ ผ่าน **LiteSpeed Cache Plugin → CDN → Cloudflare** รองรับหลาย Cloudflare Account (คนละ email คนละ token)
 
 ## คำสั่งรัน
-
-### วิธี 1: ดึง config จาก private repo (แนะนำ)
 
 ```bash
 GH_TOKEN="ghp_xxxxx"
 curl -s -H "Authorization: token $GH_TOKEN" \
-    https://raw.githubusercontent.com/AnonymousVS/config/main/Cf-Token-Litespeed-Cloudflare-Api-Update.conf \
-    -o /tmp/Cf-Token-Litespeed-Cloudflare-Api-Update.conf && \
-curl -s https://raw.githubusercontent.com/AnonymousVS/litespeed-cloudflare-api-email/main/server-config.conf \
+    https://raw.githubusercontent.com/AnonymousVS/config/main/Litespeed-Cloudflare-Api-Update.conf \
+    -o /tmp/Litespeed-Cloudflare-Api-Update.conf && \
+curl -s https://raw.githubusercontent.com/AnonymousVS/Litespeed-Cloudflare-Api-Update/main/server-config.conf \
     -o /tmp/server-config.conf && \
-bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/litespeed-cloudflare-api-email/main/replace-token-email.sh)
+curl -s https://raw.githubusercontent.com/AnonymousVS/Litespeed-Cloudflare-Api-Update/main/domains.csv \
+    -o /tmp/domains.csv && \
+bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Litespeed-Cloudflare-Api-Update/main/replace-token-email.sh)
 ```
+
+> ต้องรันด้วย **root**
+
+---
 
 ## ไฟล์ในโปรเจค
 
@@ -22,129 +26,114 @@ bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/litespeed-cloudflar
 |------|---------|----------|
 | `replace-token-email.sh` | Public repo | Script หลัก |
 | `server-config.conf` | Public repo | cPanel Users + Telegram + ตัวเลือก |
-| `Cf-Token-Litespeed-Cloudflare-Api-Update.conf` | **Private repo** (`AnonymousVS/config`) | Cloudflare API Token (cfut_) |
+| `domains.csv` | Public repo | domain + CF email (ว่าง = ทุกเว็บ) |
+| `Litespeed-Cloudflare-Api-Update.conf` | **Private repo** (`AnonymousVS/config`) | email → token mapping |
 
 ## Config
+
+### domains.csv — ระบุ domain + Cloudflare Email
+
+```csv
+domain,cf_email
+elon168.org,ufavisionseoteam16@gmail.com
+kingdom988.com,ufavisionseoteam17@gmail.com
+glm7899.net,ufavisionseoteam18@gmail.com
+slot1bet.org,ufavisionseoteam16@gmail.com
+```
+
+- มี domain → แก้เฉพาะ domain ที่ระบุ
+- cf_email → ใช้ map หา token จาก private config
+- ว่าง / ไม่มีไฟล์ → แก้ทุกเว็บ + ใช้ default token
+
+### Litespeed-Cloudflare-Api-Update.conf (Private)
+
+**หลาย account (แนะนำ):**
+```bash
+declare -A CF_TOKENS
+
+CF_TOKENS["ufavisionseoteam16@gmail.com"]="cfut_xxxxx_token_account1"
+CF_TOKENS["ufavisionseoteam17@gmail.com"]="cfut_yyyyy_token_account2"
+CF_TOKENS["ufavisionseoteam18@gmail.com"]="cfut_zzzzz_token_account3"
+```
+
+**token เดียว (ทุกเว็บ):**
+```bash
+CF_TOKEN="cfut_xxxxx"
+```
+
+**API Token Permission:** Zone-Zone-Read, Zone-Cache Purge-Purge, Zone-Bot Management-Edit
 
 ### server-config.conf (Public)
 
 ```bash
-# ระบุ cPanel user (คั่นด้วย space) — ว่าง = scan ทั้ง server
 CPANEL_USERS="y2026m04ns504 jan2026newkey"
 
-# Cloudflare Email (สำหรับ LiteSpeed display — ไม่ใช้สำหรับ auth)
-CF_EMAIL=""
-
-# Telegram Notification
 TELEGRAM_BOT_TOKEN="xxxx:xxxxxxx"
 TELEGRAM_CHAT_ID="-xxxxxxxxxx"
 
-# ตัวเลือก
-CF_ONLY_ACTIVE="no"      # no = อัปเดตทุกเว็บ / yes = เฉพาะเว็บที่เปิด CF อยู่
-CF_OVERWRITE_KEY="yes"    # yes = เขียนทับ key เดิม / no = ข้ามเว็บที่มี key แล้ว
+CF_ONLY_ACTIVE="no"
+CF_OVERWRITE_KEY="yes"
 ```
-
-### Cf-Token-Litespeed-Cloudflare-Api-Update.conf (Private)
-
-```bash
-# WordPress API Token เท่านั้น (cfut_) — ห้ามใช้ Global Key
-CF_TOKEN="cfut_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-```
-
-**API Token Permission:**
-- Zone — Zone — Read
-- Zone — Cache Purge — Purge
-- Zone — Bot Management — Edit
 
 ---
 
+## Flow การทำงาน
+
+```
+1. โหลด server-config.conf → CPANEL_USERS, Telegram
+2. โหลด domains.csv → domain + cf_email mapping
+3. โหลด CF Token config → email + token mapping
+4. Validate: ทุก token ต้องเป็น cfut_
+5. Scan WordPress ตาม CPANEL_USERS
+6. Filter ตาม domains.csv (ถ้ามี)
+7. ทุก domain:
+   → หา email จาก domains.csv
+   → หา token จาก CF_TOKENS[email]
+   → ใส่ token + email ลง LiteSpeed CDN
+   → ดึง Zone ID ด้วย Bearer token ที่ถูก account
+   → Verify ผลลัพธ์
+8. สรุปผล + Telegram notification
+```
+
 ## Features
 
-- ใช้ **WordPress API Token (cfut_)** เท่านั้น — ปลอดภัยกว่า Global Key
-- **CF Token แยก private repo** — ไม่ถูก revoke โดย GitHub/Cloudflare scanner
-- **Auto-detect cfut_ prefix** → Bearer auth + email ว่างอัตโนมัติ
-- **CPANEL_USERS** — ระบุ user เฉพาะ หรือ scan ทั้ง server
+- **Multi-token**: แต่ละ CF account มี token ของตัวเอง — รันครั้งเดียวจบ
+- **WordPress API Token (cfut_)** เท่านั้น
+- **CF Token แยก private repo** — ไม่ถูก revoke
+- **domains.csv** — ระบุ domain + email เฉพาะ
+- **Backward compatible** — CF_TOKEN เดียวยังใช้ได้
 - เปิด **Cloudflare API + CDN + Clear CF cache** อัตโนมัติ
-- ดึง **Zone ID** จาก Cloudflare API + retry 3 ครั้ง
-- **Telegram notification** สรุปผลหลังรันเสร็จ
-- รันซ้ำได้ปลอดภัย (idempotent)
+- ดึง **Zone ID** + retry 3 ครั้ง
+- **Telegram notification** สรุปผล
+- **Spinner** แสดง progress
 - รัน **parallel** สูงสุด 5 เว็บพร้อมกัน
-- ตรวจสอบผลลัพธ์ + เก็บ **Log แยกตามสถานะ**
-- Config ค้นหาอัตโนมัติ: `/tmp/` → `/usr/local/etc/litespeed-cloudflare/` → `/root/` → ถาม PAT
-
-## ขั้นตอนการทำงาน
-
-Script ทำงานต่อเว็บ:
-
-| Step | ทำอะไร |
-|------|--------|
-| 1 | ตรวจ LiteSpeed Cache Plugin active |
-| 2 | อ่าน options ปัจจุบัน |
-| 3 | เช็ค CF_ONLY_ACTIVE / CF_OVERWRITE_KEY |
-| 4 | Auto-fix domain name จาก folder name |
-| 5 | เปิด CF API + CDN + Clear CF cache = ON |
-| 6 | ใส่ API Token + email ว่าง |
-| 7 | ดึง Zone ID จาก CF API (retry 3 ครั้ง) |
-| 8 | บันทึก Zone ID ลง DB |
-| 9 | Verify ทุกค่า |
+- **Log แยกตามสถานะ**
 
 ## สถานะผลลัพธ์
 
 | สถานะ | ความหมาย | Log File |
 |-------|----------|----------|
-| ✅ **PASS** | Zone ID แสดง = สำเร็จ | `lscwp-cf-update-pass.log` |
+| ✅ **PASS** | สำเร็จ (Zone ID แสดง) | `lscwp-cf-update-pass.log` |
 | ⏩ **NOCHANGE** | มี key อยู่แล้ว ข้ามไป | `lscwp-cf-update-nochange.log` |
 | ❌ **FAIL** | CF API error / verify ไม่ผ่าน | `lscwp-cf-update-fail.log` |
-| ⏭ **SKIP** | Plugin ไม่ active / CF ปิดอยู่ | `lscwp-cf-update-skip.log` |
-| ⚙️ **AUTO-FIXED** | Domain name ถูกแก้จาก folder name | `lscwp-cf-update-mismatch.log` |
+| ⏭ **SKIP** | Plugin ไม่ active / CF ปิด / ไม่มี token | `lscwp-cf-update-skip.log` |
 
-**Log files:** `/var/log/lscwp-cf-update*.log`
-
-```bash
-cat /var/log/lscwp-cf-update.log        # ดู log รวม
-cat /var/log/lscwp-cf-update-pass.log   # เฉพาะที่สำเร็จ
-cat /var/log/lscwp-cf-update-fail.log   # เฉพาะที่ล้มเหลว
-```
-
-## ค่า Runtime
-
-| ตัวแปร | ค่า default | คำอธิบาย |
-|--------|-------------|----------|
-| `MAX_JOBS` | 5 | จำนวนเว็บที่รัน parallel พร้อมกัน |
-| `WP_TIMEOUT` | 30 | Timeout ต่อเว็บ (วินาที) |
-| `MAX_RETRY` | 3 | จำนวนครั้ง retry CF API |
-| `RETRY_DELAY` | 5 | หน่วงระหว่าง retry (วินาที) |
-
-## Requirements
-
-- **Root access**
-- **WP-CLI** — [wp-cli.org](https://wp-cli.org)
-- **cPanel / WHM**
-- **LiteSpeed Cache Plugin**
-- **curl**
+**Log:** `/var/log/lscwp-cf-update*.log`
 
 ## Changelog
 
-### v3 (2026-04-20) — ปัจจุบัน
+### v3.1 (2026-04-21) — ปัจจุบัน
 
-- แยก config 2 ไฟล์: `server-config.conf` (public) + CF Token (private)
-- WordPress API Token (`cfut_`) เท่านั้น — ห้ามใช้ Global Key
-- LiteSpeed CDN email ว่างอัตโนมัติ
-- Cloudflare API: `Authorization: Bearer` เท่านั้น
-- เพิ่ม `CPANEL_USERS` (ระบุ user เฉพาะ หรือ scan ทั้ง server)
-- เพิ่ม Telegram notification สรุปผล
-- Config ค้นหาอัตโนมัติ
+- Multi-token: CF_TOKENS["email"]="cfut_token" (หลาย account)
+- domains.csv: domain + cf_email mapping
+- Per-domain token: ดึง Zone ID ด้วย token ที่ถูก account
+- Backward compatible: CF_TOKEN เดียวยังใช้ได้
 
-### v2
+### v3 (2026-04-20)
 
-- อ่าน config จาก 2 ไฟล์ CSV (`config-domain.csv` + `config-api-key-token.csv`)
-- แต่ละโดเมนมี Email + Token ของตัวเอง
-- Zone ID verification + retry
-
-### v1
-
-- อ่าน config จาก `.conf` ไฟล์เดียว
-- ใส่ Key + Email เดียวกันให้ทุกเว็บบนเซิร์ฟเวอร์
+- แยก config: server-config.conf (public) + CF Token (private)
+- WordPress API Token (cfut_) เท่านั้น
+- เพิ่ม CPANEL_USERS + Telegram + Spinner
 
 ## License
 
