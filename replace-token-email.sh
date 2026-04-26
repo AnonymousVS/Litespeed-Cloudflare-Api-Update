@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================
-#  replace-token-email.sh v4.2
+#  replace-token-email.sh v4.3
 #  Bulk Update Cloudflare API Token
 #  LiteSpeed Cache › CDN › Cloudflare
 # ============================================================
@@ -28,6 +28,8 @@
 #   bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Litespeed-Cloudflare-Api-Update/main/replace-token-email.sh)
 # =============================================================
 # CHANGELOG:
+# v4.3 (2026-04-27)
+#   - Fix: spinner ไม่เว้นบรรทัดก่อนแสดงผล (clear line ก่อน log)
 # v4.2 (2026-04-27)
 #   - ปรับ output สั้นลง: cpanel_user | domain | zone 5 ตัว
 # v4.1 (2026-04-27)
@@ -53,7 +55,7 @@
 #   - Single config file, auto-detect จาก CF_EMAIL
 # =============================================================
 
-VERSION="v4.2"
+VERSION="v4.3"
 PRIVATE_REPO="AnonymousVS/config"
 PUBLIC_REPO="AnonymousVS/Litespeed-Cloudflare-Api-Update"
 CF_TOKEN_FILE="Litespeed-Cloudflare-Api-Update.conf"
@@ -402,6 +404,7 @@ process_site() {
 
     _log() {
         local ts; ts=$(date '+%Y-%m-%d %H:%M:%S')
+        printf "\r\033[K"
         echo "$1"
         ( flock 200; echo "[$ts] $1" >> "$LOG_FILE" ) 200>"$LOCK_FILE"
     }
