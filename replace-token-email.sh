@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================
-#  replace-token-email.sh v4.7
+#  replace-token-email.sh v4.8
 #  Bulk Update Cloudflare API Token
 #  LiteSpeed Cache › CDN › Cloudflare
 # ============================================================
@@ -28,6 +28,9 @@
 #   bash <(curl -s https://raw.githubusercontent.com/AnonymousVS/Litespeed-Cloudflare-Api-Update/main/replace-token-email.sh)
 # =============================================================
 # CHANGELOG:
+# v4.8 (2026-04-27)
+#   - Parked: full process main domain (token+zone+purge) + purge parked แยก
+#   - Parked: ทำ main domain ครั้งเดียว (MAIN_PROCESSED map)
 # v4.7 (2026-04-27)
 #   - Parked domain: detect จาก /etc/userdatadomains (แสดง main domain + cpanel user)
 #   - Not on server: detect domain ที่ไม่อยู่บน server → log error
@@ -36,6 +39,9 @@
 #   - เพิ่ม Parked/Alias domain support: detect จาก domains.csv + purge CF cache
 # v4.5 (2026-04-27)
 #   - Purge CF cache: แสดง purge สำเร็จ/ไม่สำเร็จ + log ชื่อเว็บที่ fail
+# v4.8 (2026-04-27)
+#   - Parked: full process main domain (token+zone+purge) + purge parked แยก
+#   - Parked: ทำ main domain ครั้งเดียว (MAIN_PROCESSED map)
 # v4.7 (2026-04-27)
 #   - Parked domain: detect จาก /etc/userdatadomains (แสดง main domain + cpanel user)
 #   - Not on server: detect domain ที่ไม่อยู่บน server → log error
@@ -73,7 +79,7 @@
 #   - Single config file, auto-detect จาก CF_EMAIL
 # =============================================================
 
-VERSION="v4.7"
+VERSION="v4.8"
 PRIVATE_REPO="AnonymousVS/config"
 PUBLIC_REPO="AnonymousVS/Litespeed-Cloudflare-Api-Update"
 CF_TOKEN_FILE="Litespeed-Cloudflare-Api-Update.conf"
@@ -666,14 +672,15 @@ echo ""
 log "──────────────────────────────────────"
 log "  ประมวลผลครบ $TOTAL เว็บ"
 
-# ─── Parked/Alias domains: Purge CF cache only ──────────────
+# ─── Parked/Alias domains: Full process main + Purge parked ─
 if [[ ${#PARKED_DOMAINS[@]} -gt 0 ]]; then
     echo ""
     log "======================================"
-    log "  🔗 Parked/Alias Domains — Purge CF cache only"
+    log "  🔗 Parked/Alias Domains — Update main + Purge parked"
     log "======================================"
     P_COUNT=0
     P_TOTAL=${#PARKED_DOMAINS[@]}
+    declare -A MAIN_PROCESSED
 
     for _pd in "${PARKED_DOMAINS[@]}"; do
         P_COUNT=$((P_COUNT+1))
@@ -682,6 +689,12 @@ if [[ ${#PARKED_DOMAINS[@]} -gt 0 ]]; then
         _pd_info="${PARKED_INFO[$_pd]:-}"
         _pd_main=$(echo "$_pd_info" | cut -d'|' -f1)
         _pd_user=$(echo "$_pd_info" | cut -d'|' -f2)
+
+        # หา docroot ของ main domain
+        _pd_docroot=$(grep "^${_pd_main}:" /etc/userdatadomains 2>/dev/null | awk -F'==' '{print $5}')
+        if [[ -z "$_pd_docroot" ]]; then
+            _pd_docroot="/home/${_pd_user}/public_html"
+        fi
 
         # หา email + token
         _pd_email="${DOMAIN_CF_EMAIL[$_pd]:-}"
@@ -697,37 +710,69 @@ if [[ ${#PARKED_DOMAINS[@]} -gt 0 ]]; then
             continue
         fi
 
-        # ดึง Zone ID
-        _pd_zone=""
+        # ── Full process main domain (ทำครั้งเดียวต่อ main) ──
+        if [[ -z "${MAIN_PROCESSED[$_pd_main]+_}" && -f "$_pd_docroot/wp-config.php" ]]; then
+            MAIN_PROCESSED["$_pd_main"]=1
+            log "  🔧 [$P_COUNT/$P_TOTAL] $_pd → main: $_pd_main ($_pd_user)"
+
+            # Step A: litespeed-option set credentials
+            wp --path="$_pd_docroot" litespeed-option set cdn-cloudflare 1 --allow-root >/dev/null 2>&1
+            wp --path="$_pd_docroot" litespeed-option set cdn-cloudflare_key "$_pd_token" --allow-root >/dev/null 2>&1
+            wp --path="$_pd_docroot" litespeed-option set cdn-cloudflare_email "" --allow-root >/dev/null 2>&1
+            wp --path="$_pd_docroot" litespeed-option set cdn-cloudflare_name "$_pd_main" --allow-root >/dev/null 2>&1
+            wp --path="$_pd_docroot" litespeed-option set cdn-cloudflare_clear 1 --allow-root >/dev/null 2>&1
+            wp --path="$_pd_docroot" litespeed-option set cdn 1 --allow-root >/dev/null 2>&1
+
+            # Step B: Zone ID ของ main domain
+            _main_zone=$(curl -s "https://api.cloudflare.com/client/v4/zones?name=$_pd_main" \
+                -H "Authorization: Bearer $_pd_token" \
+                -H "Content-Type: application/json" 2>/dev/null \
+                | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+            if [[ -n "$_main_zone" ]]; then
+                wp --path="$_pd_docroot" option update litespeed.conf.cdn-cloudflare_zone "$_main_zone" --allow-root >/dev/null 2>&1
+                log "     main: $_pd_main | token ✅ | zone: ${_main_zone:0:5}..."
+
+                # Step C: Purge main domain
+                _main_purge=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${_main_zone}/purge_cache" \
+                    -H "Authorization: Bearer $_pd_token" \
+                    -H "Content-Type: application/json" \
+                    -d '{"purge_everything":true}' 2>/dev/null)
+                echo "$_main_purge" | grep -q '"success":true' \
+                    && log "     main: $_pd_main | purged ✅" \
+                    || log "     main: $_pd_main | purge failed ❌"
+            else
+                log "     main: $_pd_main | Zone ID ไม่เจอ ❌"
+            fi
+        fi
+
+        # ── Purge parked domain CF cache ─────────────────────
         _pd_zone=$(curl -s "https://api.cloudflare.com/client/v4/zones?name=$_pd" \
             -H "Authorization: Bearer $_pd_token" \
             -H "Content-Type: application/json" 2>/dev/null \
             | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 
-        if [[ -z "$_pd_zone" ]]; then
-            log "  ❌ [$P_COUNT/$P_TOTAL] $_pd → parked ของ $_pd_main ($_pd_user) | Zone ID ไม่เจอ"
-            echo "$_pd" > "${RESULT_DIR}/purge_fail_parked_${P_COUNT}"
-            continue
-        fi
+        if [[ -n "$_pd_zone" ]]; then
+            _pd_purge=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${_pd_zone}/purge_cache" \
+                -H "Authorization: Bearer $_pd_token" \
+                -H "Content-Type: application/json" \
+                -d '{"purge_everything":true}' 2>/dev/null)
 
-        # Purge CF cache
-        _pd_purge=""
-        _pd_purge=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${_pd_zone}/purge_cache" \
-            -H "Authorization: Bearer $_pd_token" \
-            -H "Content-Type: application/json" \
-            -d '{"purge_everything":true}' 2>/dev/null)
-
-        if echo "$_pd_purge" | grep -q '"success":true'; then
-            log "  ✅ [$P_COUNT/$P_TOTAL] $_pd → $_pd_main ($_pd_user) | zone: ${_pd_zone:0:5}... | purged"
-            touch "${RESULT_DIR}/purge_pass_parked_${P_COUNT}"
+            if echo "$_pd_purge" | grep -q '"success":true'; then
+                log "  ✅ [$P_COUNT/$P_TOTAL] $_pd → $_pd_main | zone: ${_pd_zone:0:5}... | purged"
+                touch "${RESULT_DIR}/purge_pass_parked_${P_COUNT}"
+            else
+                log "  ❌ [$P_COUNT/$P_TOTAL] $_pd → $_pd_main | purge failed"
+                echo "$_pd" > "${RESULT_DIR}/purge_fail_parked_${P_COUNT}"
+            fi
         else
-            log "  ❌ [$P_COUNT/$P_TOTAL] $_pd → $_pd_main ($_pd_user) | purge failed"
+            log "  ❌ [$P_COUNT/$P_TOTAL] $_pd → $_pd_main | Zone ID ไม่เจอ"
             echo "$_pd" > "${RESULT_DIR}/purge_fail_parked_${P_COUNT}"
         fi
     done
 
     log "──────────────────────────────────────"
-    log "  Parked purge เสร็จ $P_TOTAL เว็บ"
+    log "  Parked เสร็จ $P_TOTAL เว็บ"
 fi
 
 # ─── Domain ไม่อยู่บน server ────────────────────────────────
